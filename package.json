@@ -1,0 +1,9 @@
+{
+  "name": "rent-right-shared",
+  "version": "1.0.0",
+  "description": "Shared types and logic for Rent Right web & mobile apps",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {},
+  "dependencies": {}
+}
