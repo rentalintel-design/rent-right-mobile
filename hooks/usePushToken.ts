@@ -31,9 +31,7 @@ export function usePushToken(userId?: string) {
     })
 
     return () => {
-      if (responseListener.current) {
-        Notifications.removeNotificationSubscription(responseListener.current)
-      }
+      responseListener.current?.remove()
     }
   }, [userId])
 }

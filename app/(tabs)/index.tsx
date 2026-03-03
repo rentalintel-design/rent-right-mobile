@@ -32,7 +32,6 @@ import FiltersSheet from '@/components/map/FiltersSheet'
 import LocateButton from '@/components/map/LocateButton'
 
 import type { BhkFilter, RentFilter, SourceFilter, FurnishingFilter, Vacancy } from '@/hooks/useVacancies'
-import type { GRID_STEP, GRID_STEP_COARSE } from 'rent-right-shared'
 
 // ─── Landlord Dashboard ───────────────────────────────────────────────────────
 
