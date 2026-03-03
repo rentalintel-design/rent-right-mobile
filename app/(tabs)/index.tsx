@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator } from 'react-native'
-import MapView, { Region } from 'react-native-maps'
+import MapView, { Region, PROVIDER_GOOGLE } from 'react-native-maps'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -356,6 +356,7 @@ function MapScreen() {
         <MapView
           ref={mapRef}
           style={styles.flex}
+          provider={PROVIDER_GOOGLE}
           initialRegion={initialRegion}
           onRegionChangeComplete={setRegion}
           showsUserLocation
@@ -406,8 +407,34 @@ function MapScreen() {
           )}
         </View>
 
-        {/* Bottom-right: locate + filter buttons */}
+        {/* Bottom-right: zoom, locate + filter buttons */}
         <View style={[styles.bottomRight, { bottom: insets.bottom + 100 }]}>
+          <Pressable
+            style={[styles.zoomBtn, { backgroundColor: c.bgSurface, borderColor: c.border }]}
+            onPress={() => {
+              if (!region || !mapRef.current) return
+              mapRef.current.animateToRegion({
+                ...region,
+                latitudeDelta: region.latitudeDelta / 2,
+                longitudeDelta: region.longitudeDelta / 2,
+              }, 300)
+            }}
+          >
+            <Text style={[styles.zoomText, { color: c.text1 }]}>＋</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.zoomBtn, { backgroundColor: c.bgSurface, borderColor: c.border }]}
+            onPress={() => {
+              if (!region || !mapRef.current) return
+              mapRef.current.animateToRegion({
+                ...region,
+                latitudeDelta: region.latitudeDelta * 2,
+                longitudeDelta: region.longitudeDelta * 2,
+              }, 300)
+            }}
+          >
+            <Text style={[styles.zoomText, { color: c.text1 }]}>ー</Text>
+          </Pressable>
           <LocateButton onLocate={handleLocate} />
           <Pressable
             style={[styles.filterBtn, { backgroundColor: c.bgSurface, borderColor: c.border }]}
@@ -485,6 +512,20 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 4,
   },
+  zoomBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  zoomText: { fontSize: 22, fontWeight: '700' },
   filterIcon: { fontSize: 20 },
   filterBadge: {
     position: 'absolute',

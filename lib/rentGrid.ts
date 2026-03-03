@@ -100,6 +100,9 @@ export function buildRentGrid(
       const normRent = normCount > 0 ? normSum / normCount : 0
       const rentRatio = baselineRent > 0 && normRent > 0 ? normRent / baselineRent : 0
 
+      // Only include cells with actual rent data (skip empty cells for performance)
+      if (!hasData) continue
+
       features.push({
         coordinates: [
           { latitude: lat, longitude: lng },
