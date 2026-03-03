@@ -1,24 +1,85 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
+import 'react-native-url-polyfill/auto'
+import { useEffect } from 'react'
+import { Stack, router, useSegments } from 'expo-router'
+import { StatusBar } from 'expo-status-bar'
+import * as SplashScreen from 'expo-splash-screen'
+import * as Linking from 'expo-linking'
+import 'react-native-reanimated'
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { AuthProvider, useAuth } from '@/context/AuthContext'
+import { usePushToken } from '@/hooks/usePushToken'
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+SplashScreen.preventAutoHideAsync()
 
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
+function RootNavigator() {
+  const { session, profile, loading, user } = useAuth()
+  const segments = useSegments()
+
+  usePushToken(user?.id)
+
+  useEffect(() => {
+    if (!loading) SplashScreen.hideAsync()
+  }, [loading])
+
+  // Auth guard
+  useEffect(() => {
+    if (loading) return
+
+    const inAuth = segments[0] === '(auth)'
+
+    if (!session) {
+      if (!inAuth) router.replace('/(auth)/login')
+    } else if (!profile?.role) {
+      router.replace('/(auth)/onboarding')
+    } else {
+      if (inAuth) router.replace('/(tabs)')
+    }
+  }, [session, profile, loading, segments])
+
+  // Deep link handler
+  useEffect(() => {
+    function handleDeepLink(event: { url: string }) {
+      const url = event.url
+      try {
+        const parsed = new URL(url)
+        const path = parsed.pathname
+
+        const vacancyMatch = path.match(/^\/vacancy\/([a-zA-Z0-9-]+)$/)
+        if (vacancyMatch) { router.push(`/vacancy/${vacancyMatch[1]}`); return }
+
+        const vaultMatch = path.match(/^\/vault\/review\/([a-zA-Z0-9]+)$/)
+        if (vaultMatch) { router.push(`/vault/review/${vaultMatch[1]}`); return }
+      } catch { /* invalid URL */ }
+    }
+
+    const sub = Linking.addEventListener('url', handleDeepLink)
+    Linking.getInitialURL().then(url => { if (url) handleDeepLink({ url }) })
+    return () => sub.remove()
+  }, [session])
+
+  if (loading) return null
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
-  );
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(auth)" />
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="vacancy/[id]" />
+      <Stack.Screen name="vacancy/create" />
+      <Stack.Screen name="vault/create" />
+      <Stack.Screen name="vault/[id]" />
+      <Stack.Screen name="vault/review/[token]" />
+      <Stack.Screen name="contribution/submit" />
+      <Stack.Screen name="chat/inbox" />
+      <Stack.Screen name="chat/[conversationId]" />
+    </Stack>
+  )
+}
+
+export default function RootLayout() {
+  return (
+    <AuthProvider>
+      <RootNavigator />
+      <StatusBar style="light" />
+    </AuthProvider>
+  )
 }
