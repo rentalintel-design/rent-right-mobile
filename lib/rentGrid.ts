@@ -22,6 +22,7 @@ export type LocalityRow = {
 }
 
 export type RentFeature = {
+  id: string
   coordinates: { latitude: number; longitude: number }[]
   hasData: boolean
   count: number
@@ -66,6 +67,7 @@ export function buildLocalityRentFromStats(
     if (!isFinite(cx) || !isFinite(cy)) return []
 
     return [{
+      id: `loc:${seed.name}`,
       coordinates: ring.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
       centroid: { latitude: cy, longitude: cx },
       hasData: (s?.submission_count ?? 0) > 0,
@@ -125,6 +127,7 @@ export function buildStreetGridFromStats(
       const rentRatio = s.rent_ratio ?? 0
 
       features.push({
+        id: `grid:${s.grid_lat}:${s.grid_lng}`,
         coordinates: [
           { latitude: lat, longitude: lng },
           { latitude: lat, longitude: lng + step },

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator } from 'react-native'
+import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator, InteractionManager } from 'react-native'
 import MapView, { Region, PROVIDER_GOOGLE, Polygon } from 'react-native-maps'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -306,38 +306,38 @@ function MapScreen() {
 
   const STREET_MIN_ZOOM = 14
 
-  // Debounced viewport region — only recomputes street grid 300ms after panning stops
-  const [viewportRegion, setViewportRegion] = useState<Region>(initialRegion)
-  useEffect(() => {
-    const t = setTimeout(() => setViewportRegion(region), 300)
-    return () => clearTimeout(t)
-  }, [region])
-
   // Auto-zoom to 14 when street layer activated below minimum zoom
   useEffect(() => {
     if (activeLayer !== 'rent-street') return
     if (zoom >= STREET_MIN_ZOOM) return
-    const delta = 360 / Math.pow(2, STREET_MIN_ZOOM) // ≈ 0.022°
+    const delta = 360 / Math.pow(2, STREET_MIN_ZOOM)
     mapRef.current?.animateToRegion({
       latitude: region.latitude,
       longitude: region.longitude,
       latitudeDelta: delta * 1.5,
       longitudeDelta: delta,
     }, 500)
-  }, [activeLayer]) // only on layer activation
+  }, [activeLayer])
+
+  // Debounced viewport region — recomputes street grid 300ms after panning/zooming stops
+  const [viewportRegion, setViewportRegion] = useState<Region>(initialRegion)
+  useEffect(() => {
+    const t = setTimeout(() => setViewportRegion(region), 300)
+    return () => clearTimeout(t)
+  }, [region])
 
   const rentFeatures = useMemo(() => {
     if (activeLayer === 'none' || activeLayer === 'rent-raw') return []
     if (activeLayer === 'rent-locality') {
       return buildLocalityRentFromStats(localities, localityStats)
     }
-    // Street: zoom gate + viewport filter
+    if (!cityHull || !bounds) return []
     const vpZoom = Math.log2(360 / (viewportRegion.longitudeDelta || 0.01))
-    if (vpZoom < STREET_MIN_ZOOM || !cityHull || !bounds) return []
-    // Filter stats to viewport + 1.5× buffer — only pass visible cells to builder
-    const buf = 1.5
-    const latHalf = (viewportRegion.latitudeDelta / 2) * buf
-    const lngHalf = (viewportRegion.longitudeDelta / 2) * buf
+    if (vpZoom < STREET_MIN_ZOOM) return []
+    // 1.5× buffer so cells stay visible beyond viewport edges while panning (no blink).
+    // Pool-based rendering means extra cells are just prop updates — no crash risk.
+    const latHalf = (viewportRegion.latitudeDelta / 2) * 1.5
+    const lngHalf = (viewportRegion.longitudeDelta / 2) * 1.5
     const vLatMin = viewportRegion.latitude - latHalf
     const vLatMax = viewportRegion.latitude + latHalf
     const vLngMin = viewportRegion.longitude - lngHalf
@@ -351,32 +351,30 @@ function MapScreen() {
     return buildStreetGridFromStats(cityName, viewportStats, cityHull)
   }, [activeLayer, viewportRegion, localities, localityStats, streetGridStats, cityName, cityHull, bounds])
 
-  // Delay-swap features to avoid native crash when switching polygon layers:
-  // clear first, then mount new batch after react-native-maps removes old views.
-  // After swap completes, process any queued pending layer change.
-  const [displayedFeatures, setDisplayedFeatures] = useState<typeof rentFeatures>([])
+  // Pool-based rendering: no mount/unmount on layer switch or viewport pan.
+  // isSwitching just drives the spinner and queued layer processing.
+  const prevLayerRef = useRef<ActiveLayer>('none')
   useEffect(() => {
+    const layerChanged = prevLayerRef.current !== activeLayer
+    prevLayerRef.current = activeLayer
+    if (!layerChanged) return
+
     setIsSwitching(true)
-    setDisplayedFeatures([])
     const t = setTimeout(() => {
-      setDisplayedFeatures(rentFeatures)
-      // Give native map a further tick to finish mounting before allowing next switch
-      setTimeout(() => {
-        if (pendingLayer.current !== null) {
-          const next = pendingLayer.current
-          pendingLayer.current = null
-          setActiveLayer(next)
-        } else {
-          setIsSwitching(false)
-        }
-      }, 100)
+      if (pendingLayer.current !== null) {
+        const next = pendingLayer.current
+        pendingLayer.current = null
+        setActiveLayer(next)
+      } else {
+        setIsSwitching(false)
+      }
     }, 150)
     return () => clearTimeout(t)
-  }, [rentFeatures])
+  }, [activeLayer])
 
-  // Street grey background ring — only shown at zoom ≥ 14
-  const streetGreyRing = useMemo(() => {
-    if (activeLayer !== 'rent-street' || zoom < STREET_MIN_ZOOM) return null
+  // Coordinates are stable — only depend on cityHull/bounds, NOT zoom.
+  // Zoom gate is handled in JSX so coordinates don't recompute on every pan.
+  const streetGreyRingCoords = useMemo(() => {
     if (cityHull && cityHull.length >= 3) {
       return cityHull.map(([lng, lat]) => ({ latitude: lat, longitude: lng }))
     }
@@ -389,14 +387,19 @@ function MapScreen() {
       ]
     }
     return null
-  }, [activeLayer, cityHull, bounds])
+  }, [cityHull, bounds])
+  const showStreetRing = activeLayer === 'rent-street' && zoom >= STREET_MIN_ZOOM
 
   // Debounce showLabels so many Markers don't mount/unmount simultaneously on zoom.
   // Street layer labels also gated on STREET_MIN_ZOOM to match polygon visibility.
   const [showLabels, setShowLabels] = useState(false)
   useEffect(() => {
     const streetOk = activeLayer !== 'rent-street' || zoom >= STREET_MIN_ZOOM
-    const t = setTimeout(() => setShowLabels(zoom > 10 && streetOk), 200)
+    const t = setTimeout(() => {
+      const next = zoom > 10 && streetOk
+      console.log('[RentMap] showLabels:', next, 'zoom:', zoom.toFixed(2))
+      setShowLabels(next)
+    }, 200)
     return () => clearTimeout(t)
   }, [zoom, activeLayer])
 
@@ -458,24 +461,23 @@ function MapScreen() {
         >
           {/* Layer 1: Street grey background — single hull polygon so empty grid
                areas look grey (locality grey comes from no-data locality polygons) */}
-          {streetGreyRing && (
+          {showStreetRing && streetGreyRingCoords && (
             <Polygon
-              coordinates={streetGreyRing}
+              coordinates={streetGreyRingCoords}
               fillColor="rgba(148, 163, 184, 0.35)"
               strokeColor="rgba(148, 163, 184, 0.4)"
               strokeWidth={1}
             />
           )}
 
-          {/* Layer 2: Data polygons (locality: grey+colored, street: colored only) */}
-          {showRentLayer && (
-            <RentPolygons
-              features={displayedFeatures}
-              rentMin={rentMin}
-              rentMax={rentMax}
-              showLabels={showLabels}
-            />
-          )}
+          {/* Layer 2: Data polygons — always rendered (fixed pool, never mounts/unmounts).
+               Empty features = all slots invisible at null island. No native view churn. */}
+          <RentPolygons
+            features={showRentLayer ? rentFeatures : []}
+            rentMin={rentMin}
+            rentMax={rentMax}
+            showLabels={showLabels && activeLayer === 'rent-locality'}
+          />
 
           {/* Layer 3: Outside city dim — on top of all polygons */}
           {showRentLayer && <CityMask cityHull={cityHull} bounds={bounds} />}
