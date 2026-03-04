@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { router } from 'expo-router'
-import { CITY_BOUNDS } from 'rent-right-shared'
+import { CITY_BOUNDS, GRID_STEP_250 } from 'rent-right-shared'
 import type { ActiveLayer } from 'rent-right-shared'
 
 import { useAuth } from '@/context/AuthContext'
@@ -270,8 +270,10 @@ function MapScreen() {
     [region.longitudeDelta]
   )
 
-  // Layer state
+  // Layer state + switching queue
   const [activeLayer, setActiveLayer] = useState<ActiveLayer>('none')
+  const [isSwitching, setIsSwitching] = useState(false)
+  const pendingLayer = useRef<ActiveLayer | null>(null)
   const [rentMin, setRentMin] = useState(5000)
   const [rentMax, setRentMax] = useState(100000)
 
@@ -302,28 +304,79 @@ function MapScreen() {
   // Rent features
   const cityHull = useMemo(() => getCityClipPolygon(cityName, localities), [cityName, localities])
 
+  const STREET_MIN_ZOOM = 14
+
+  // Debounced viewport region — only recomputes street grid 300ms after panning stops
+  const [viewportRegion, setViewportRegion] = useState<Region>(initialRegion)
+  useEffect(() => {
+    const t = setTimeout(() => setViewportRegion(region), 300)
+    return () => clearTimeout(t)
+  }, [region])
+
+  // Auto-zoom to 14 when street layer activated below minimum zoom
+  useEffect(() => {
+    if (activeLayer !== 'rent-street') return
+    if (zoom >= STREET_MIN_ZOOM) return
+    const delta = 360 / Math.pow(2, STREET_MIN_ZOOM) // ≈ 0.022°
+    mapRef.current?.animateToRegion({
+      latitude: region.latitude,
+      longitude: region.longitude,
+      latitudeDelta: delta * 1.5,
+      longitudeDelta: delta,
+    }, 500)
+  }, [activeLayer]) // only on layer activation
+
   const rentFeatures = useMemo(() => {
     if (activeLayer === 'none' || activeLayer === 'rent-raw') return []
     if (activeLayer === 'rent-locality') {
       return buildLocalityRentFromStats(localities, localityStats)
     }
-    // street level — wait for cityHull so cells outside city boundary are clipped
-    if (!cityHull) return []
-    return buildStreetGridFromStats(cityName, streetGridStats, cityHull)
-  }, [activeLayer, localities, localityStats, streetGridStats, cityName, cityHull])
+    // Street: zoom gate + viewport filter
+    const vpZoom = Math.log2(360 / (viewportRegion.longitudeDelta || 0.01))
+    if (vpZoom < STREET_MIN_ZOOM || !cityHull || !bounds) return []
+    // Filter stats to viewport + 1.5× buffer — only pass visible cells to builder
+    const buf = 1.5
+    const latHalf = (viewportRegion.latitudeDelta / 2) * buf
+    const lngHalf = (viewportRegion.longitudeDelta / 2) * buf
+    const vLatMin = viewportRegion.latitude - latHalf
+    const vLatMax = viewportRegion.latitude + latHalf
+    const vLngMin = viewportRegion.longitude - lngHalf
+    const vLngMax = viewportRegion.longitude + lngHalf
+    const viewportStats = streetGridStats.filter(s => {
+      const cellLat = bounds.latMin + s.grid_lat * GRID_STEP_250
+      const cellLng = bounds.lngMin + s.grid_lng * GRID_STEP_250
+      return cellLat >= vLatMin && cellLat <= vLatMax
+          && cellLng >= vLngMin && cellLng <= vLngMax
+    })
+    return buildStreetGridFromStats(cityName, viewportStats, cityHull)
+  }, [activeLayer, viewportRegion, localities, localityStats, streetGridStats, cityName, cityHull, bounds])
 
   // Delay-swap features to avoid native crash when switching polygon layers:
   // clear first, then mount new batch after react-native-maps removes old views.
+  // After swap completes, process any queued pending layer change.
   const [displayedFeatures, setDisplayedFeatures] = useState<typeof rentFeatures>([])
   useEffect(() => {
+    setIsSwitching(true)
     setDisplayedFeatures([])
-    const t = setTimeout(() => setDisplayedFeatures(rentFeatures), 150)
+    const t = setTimeout(() => {
+      setDisplayedFeatures(rentFeatures)
+      // Give native map a further tick to finish mounting before allowing next switch
+      setTimeout(() => {
+        if (pendingLayer.current !== null) {
+          const next = pendingLayer.current
+          pendingLayer.current = null
+          setActiveLayer(next)
+        } else {
+          setIsSwitching(false)
+        }
+      }, 100)
+    }, 150)
     return () => clearTimeout(t)
   }, [rentFeatures])
 
-  // Street grey background ring — memoised so JSX renders a stable element
+  // Street grey background ring — only shown at zoom ≥ 14
   const streetGreyRing = useMemo(() => {
-    if (activeLayer !== 'rent-street') return null
+    if (activeLayer !== 'rent-street' || zoom < STREET_MIN_ZOOM) return null
     if (cityHull && cityHull.length >= 3) {
       return cityHull.map(([lng, lat]) => ({ latitude: lat, longitude: lng }))
     }
@@ -338,12 +391,23 @@ function MapScreen() {
     return null
   }, [activeLayer, cityHull, bounds])
 
-  // Debounce showLabels so many Markers don't mount/unmount simultaneously on zoom
+  // Debounce showLabels so many Markers don't mount/unmount simultaneously on zoom.
+  // Street layer labels also gated on STREET_MIN_ZOOM to match polygon visibility.
   const [showLabels, setShowLabels] = useState(false)
   useEffect(() => {
-    const t = setTimeout(() => setShowLabels(zoom > 10), 200)
+    const streetOk = activeLayer !== 'rent-street' || zoom >= STREET_MIN_ZOOM
+    const t = setTimeout(() => setShowLabels(zoom > 10 && streetOk), 200)
     return () => clearTimeout(t)
-  }, [zoom])
+  }, [zoom, activeLayer])
+
+  // Queued layer change — if switching in progress, queue the latest request
+  const handleLayerChange = useCallback((layer: ActiveLayer) => {
+    if (isSwitching) {
+      pendingLayer.current = layer
+      return
+    }
+    setActiveLayer(layer)
+  }, [isSwitching])
 
   // Handlers
   const handleVacancyPress = useCallback((v: Vacancy) => {
@@ -422,6 +486,13 @@ function MapScreen() {
           ))}
         </MapView>
 
+        {/* Layer switching spinner */}
+        {isSwitching && (
+          <View style={styles.switchingOverlay} pointerEvents="none">
+            <ActivityIndicator size="small" color="#2563eb" />
+          </View>
+        )}
+
         {/* Floating UI */}
         <View style={[styles.topOverlay, { top: insets.top + Spacing.sm }]}>
           <MapSearchBar cityBounds={bounds ?? null} onSelectResult={handleSearchResult} />
@@ -431,8 +502,9 @@ function MapScreen() {
         <View style={[styles.layerOverlay, { bottom: insets.bottom + 100 }]}>
           <LayerToggleBar
             activeLayer={activeLayer}
-            onChangeLayer={setActiveLayer}
+            onChangeLayer={handleLayerChange}
             hasContributed={profile?.has_contributed ?? false}
+            disabled={isSwitching}
           />
           {showRentLayer && (
             <RentSlider
@@ -480,6 +552,13 @@ function MapScreen() {
             <Text style={styles.filterIcon}>⚙️</Text>
             {hasActiveFilters && <View style={[styles.filterBadge, { backgroundColor: c.accent }]} />}
           </Pressable>
+        </View>
+
+        {/* Zoom level indicator — bottom left */}
+        <View style={[styles.zoomBadge, { backgroundColor: c.bgSurface, borderColor: c.border, bottom: insets.bottom + 60 }]}>
+          <Text style={[Typography.caption, { color: c.text3, fontVariant: ['tabular-nums'] }]}>
+            z{zoom.toFixed(1)}
+          </Text>
         </View>
 
         {/* Count badge */}
@@ -571,6 +650,20 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
+  },
+  switchingOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomBadge: {
+    position: 'absolute',
+    left: Spacing.base,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
   },
   countBadge: {
     position: 'absolute',

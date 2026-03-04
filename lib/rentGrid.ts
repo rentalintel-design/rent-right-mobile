@@ -107,7 +107,16 @@ export function buildStreetGridFromStats(
     for (let lng = cityBounds.lngMin; lng < cityBounds.lngMax; lng += step, cj++) {
       const cLng = lng + step / 2
 
-      if (cityHull && !pointInPolygon(cLng, cLat, cityHull)) continue
+      if (cityHull) {
+        const h = step / 2
+        if (
+          !pointInPolygon(cLng,     cLat,     cityHull) ||
+          !pointInPolygon(cLng - h, cLat - h, cityHull) ||
+          !pointInPolygon(cLng + h, cLat - h, cityHull) ||
+          !pointInPolygon(cLng + h, cLat + h, cityHull) ||
+          !pointInPolygon(cLng - h, cLat + h, cityHull)
+        ) continue
+      }
 
       const s = statsMap.get(`${ci}|${cj}`)
       if (!s || (s.submission_count ?? 0) === 0) continue

@@ -8,6 +8,7 @@ type Props = {
   activeLayer: ActiveLayer
   onChangeLayer: (layer: ActiveLayer) => void
   hasContributed: boolean
+  disabled?: boolean
 }
 
 const LAYERS: { key: ActiveLayer; label: string; icon: string; locked?: boolean }[] = [
@@ -17,11 +18,11 @@ const LAYERS: { key: ActiveLayer; label: string; icon: string; locked?: boolean 
   { key: 'rent-raw', label: 'History', icon: '📌', locked: true },
 ]
 
-export default function LayerToggleBar({ activeLayer, onChangeLayer, hasContributed }: Props) {
+export default function LayerToggleBar({ activeLayer, onChangeLayer, hasContributed, disabled }: Props) {
   const c = useColors()
 
   return (
-    <View style={[styles.bar, { backgroundColor: c.bgSurface, borderColor: c.border }]}>
+    <View style={[styles.bar, { backgroundColor: c.bgSurface, borderColor: c.border }, disabled && styles.disabled]}>
       {LAYERS.map(l => {
         const isLocked = l.locked && !hasContributed
         const isActive = activeLayer === l.key
@@ -34,10 +35,10 @@ export default function LayerToggleBar({ activeLayer, onChangeLayer, hasContribu
               isLocked && styles.locked,
             ]}
             onPress={() => {
-              if (isLocked) return // TODO: show contribution prompt
+              if (isLocked || disabled) return
               onChangeLayer(isActive ? 'none' : l.key)
             }}
-            disabled={isLocked}
+            disabled={isLocked || disabled}
           >
             <Text style={styles.icon}>{l.icon}</Text>
             <Text style={[
@@ -73,4 +74,5 @@ const styles = StyleSheet.create({
   icon: { fontSize: 14 },
   label: { ...Typography.caption, fontSize: 10 },
   locked: { opacity: 0.5 },
+  disabled: { opacity: 0.6 },
 })
