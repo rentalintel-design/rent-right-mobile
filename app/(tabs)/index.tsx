@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator } from 'react-native'
-import MapView, { Region, PROVIDER_GOOGLE } from 'react-native-maps'
+import MapView, { Region, PROVIDER_GOOGLE, Polygon } from 'react-native-maps'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -14,7 +14,7 @@ import { useColors } from '@/hooks/use-theme-color'
 import { useVacancies } from '@/hooks/useVacancies'
 import { useRentData } from '@/hooks/useRentData'
 import { useMembership } from '@/hooks/useMembership'
-import { buildRentGrid, buildLocalityRentFeatures } from '@/lib/rentGrid'
+import { buildLocalityRentFromStats, buildStreetGridFromStats } from '@/lib/rentGrid'
 import { getCityClipPolygon } from '@/lib/mapUtils'
 import { DARK_MAP_STYLE } from '@/constants/mapStyles'
 import { Spacing, Typography, Radius } from '@/constants/theme'
@@ -24,7 +24,7 @@ import { formatRent } from '@/lib/vacancyUtils'
 import { VacancyMarker, ClusterMarker } from '@/components/map/VacancyMarker'
 import VacancyDetailSheet from '@/components/map/VacancyDetailSheet'
 import { RentPolygons } from '@/components/map/RentPolygons'
-import { RentHistoryPins } from '@/components/map/RentHistoryPins'
+import { CityMask } from '@/components/map/CityMask'
 import LayerToggleBar from '@/components/map/LayerToggleBar'
 import RentSlider from '@/components/map/RentSlider'
 import MapSearchBar from '@/components/map/MapSearchBar'
@@ -265,7 +265,10 @@ function MapScreen() {
 
   // Map state
   const [region, setRegion] = useState<Region>(initialRegion)
-  const zoom = useMemo(() => Math.log2(360 / (region.longitudeDelta || 0.01)), [region.longitudeDelta])
+  const zoom = useMemo(
+    () => Math.log2(360 / (region.longitudeDelta || 0.01)),
+    [region.longitudeDelta]
+  )
 
   // Layer state
   const [activeLayer, setActiveLayer] = useState<ActiveLayer>('none')
@@ -294,26 +297,53 @@ function MapScreen() {
     userId: user?.id,
   })
 
-  const { rentCells, localities, baselineRent, loading: rentLoading } = useRentData(cityName, bounds)
+  const { localities, localityStats, streetGridStats, loading: rentLoading } = useRentData(cityName, bounds)
 
   // Rent features
   const cityHull = useMemo(() => getCityClipPolygon(cityName, localities), [cityName, localities])
 
-  const viewBounds = useMemo(() => ({
-    latMin: region.latitude - region.latitudeDelta / 2,
-    latMax: region.latitude + region.latitudeDelta / 2,
-    lngMin: region.longitude - region.longitudeDelta / 2,
-    lngMax: region.longitude + region.longitudeDelta / 2,
-  }), [region])
-
   const rentFeatures = useMemo(() => {
     if (activeLayer === 'none' || activeLayer === 'rent-raw') return []
     if (activeLayer === 'rent-locality') {
-      return buildLocalityRentFeatures(localities, rentCells, baselineRent)
+      return buildLocalityRentFromStats(localities, localityStats)
     }
-    // street level
-    return buildRentGrid(cityName, rentCells, cityHull, baselineRent, undefined, viewBounds)
-  }, [activeLayer, rentCells, localities, baselineRent, cityName, cityHull, viewBounds])
+    // street level — wait for cityHull so cells outside city boundary are clipped
+    if (!cityHull) return []
+    return buildStreetGridFromStats(cityName, streetGridStats, cityHull)
+  }, [activeLayer, localities, localityStats, streetGridStats, cityName, cityHull])
+
+  // Delay-swap features to avoid native crash when switching polygon layers:
+  // clear first, then mount new batch after react-native-maps removes old views.
+  const [displayedFeatures, setDisplayedFeatures] = useState<typeof rentFeatures>([])
+  useEffect(() => {
+    setDisplayedFeatures([])
+    const t = setTimeout(() => setDisplayedFeatures(rentFeatures), 150)
+    return () => clearTimeout(t)
+  }, [rentFeatures])
+
+  // Street grey background ring — memoised so JSX renders a stable element
+  const streetGreyRing = useMemo(() => {
+    if (activeLayer !== 'rent-street') return null
+    if (cityHull && cityHull.length >= 3) {
+      return cityHull.map(([lng, lat]) => ({ latitude: lat, longitude: lng }))
+    }
+    if (bounds) {
+      return [
+        { latitude: bounds.latMin, longitude: bounds.lngMin },
+        { latitude: bounds.latMin, longitude: bounds.lngMax },
+        { latitude: bounds.latMax, longitude: bounds.lngMax },
+        { latitude: bounds.latMax, longitude: bounds.lngMin },
+      ]
+    }
+    return null
+  }, [activeLayer, cityHull, bounds])
+
+  // Debounce showLabels so many Markers don't mount/unmount simultaneously on zoom
+  const [showLabels, setShowLabels] = useState(false)
+  useEffect(() => {
+    const t = setTimeout(() => setShowLabels(zoom > 10), 200)
+    return () => clearTimeout(t)
+  }, [zoom])
 
   // Handlers
   const handleVacancyPress = useCallback((v: Vacancy) => {
@@ -347,7 +377,6 @@ function MapScreen() {
 
   const hasActiveFilters = bhkFilter !== 'All' || rentFilter !== 'All' || sourceFilter !== 'All' || furnishingFilter !== 'All'
   const showRentLayer = activeLayer === 'rent-locality' || activeLayer === 'rent-street'
-  const showRentHistory = activeLayer === 'rent-raw'
 
   return (
     <GestureHandlerRootView style={styles.flex}>
@@ -363,20 +392,29 @@ function MapScreen() {
           showsCompass={false}
           customMapStyle={DARK_MAP_STYLE}
         >
-          {/* Rent polygons */}
-          {showRentLayer && rentFeatures.length > 0 && (
-            <RentPolygons
-              features={rentFeatures}
-              rentMin={rentMin}
-              rentMax={rentMax}
-              showLabels={zoom > 13}
+          {/* Layer 1: Street grey background — single hull polygon so empty grid
+               areas look grey (locality grey comes from no-data locality polygons) */}
+          {streetGreyRing && (
+            <Polygon
+              coordinates={streetGreyRing}
+              fillColor="rgba(148, 163, 184, 0.35)"
+              strokeColor="rgba(148, 163, 184, 0.4)"
+              strokeWidth={1}
             />
           )}
 
-          {/* Rent history pins */}
-          {showRentHistory && (
-            <RentHistoryPins cells={rentCells} zoom={zoom} />
+          {/* Layer 2: Data polygons (locality: grey+colored, street: colored only) */}
+          {showRentLayer && (
+            <RentPolygons
+              features={displayedFeatures}
+              rentMin={rentMin}
+              rentMax={rentMax}
+              showLabels={showLabels}
+            />
           )}
+
+          {/* Layer 3: Outside city dim — on top of all polygons */}
+          {showRentLayer && <CityMask cityHull={cityHull} bounds={bounds} />}
 
           {/* Vacancy markers */}
           {!showRentLayer && filteredVacancies.map(v => (

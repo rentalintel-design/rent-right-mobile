@@ -1,7 +1,7 @@
-// Rent grid builders — ported from web app
-import { Delaunay } from 'd3-delaunay'
-import { CITY_BOUNDS, BHK_DIVISOR, GRID_STEP } from 'rent-right-shared'
-import { pointInPolygon, median } from './mapUtils'
+// Rent grid builders — matches web app architecture
+import { CITY_BOUNDS, GRID_STEP_250 } from 'rent-right-shared'
+import type { LocalityRentStats, StreetGridStats } from 'rent-right-shared'
+import { pointInPolygon } from './mapUtils'
 
 export type RentCell = {
   propertyId: string
@@ -13,7 +13,6 @@ export type RentCell = {
   allSubmissions: Array<{ bhk_type: string; rent_amount: number; submitted_at: string }>
 }
 
-// Re-export with null support for Supabase data
 export type LocalityRow = {
   name: string
   lat: number
@@ -36,72 +35,85 @@ export type RentFeature = {
   centroid: { latitude: number; longitude: number }
 }
 
-/** Build street-level rent grid — returns flat array of polygon features */
-export function buildRentGrid(
+/** Build locality-level rent polygons from pre-computed server-side stats.
+ *  Joins locality polygon geometry with locality_rent_stats by name.
+ */
+export function buildLocalityRentFromStats(
+  locs: LocalityRow[],
+  stats: LocalityRentStats[],
+): RentFeature[] {
+  const statsMap = new Map<string, LocalityRentStats>()
+  for (const s of stats) statsMap.set(s.locality_name, s)
+
+  const seen = new Set<string>()
+  const seeds = locs.filter(l => {
+    if (l.level !== 2 || !l.polygon) return false
+    const key = `${l.lat.toFixed(4)},${l.lng.toFixed(4)}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
+  return seeds.flatMap(seed => {
+    const ring = seed.polygon!
+    if (!ring || ring.length < 3) return []
+
+    const s = statsMap.get(seed.name)
+    const normRent = s?.norm_rent ?? 0
+    const rentRatio = s?.rent_ratio ?? 0
+    const cx = ring.reduce((sum, p) => sum + p[0], 0) / ring.length
+    const cy = ring.reduce((sum, p) => sum + p[1], 0) / ring.length
+    if (!isFinite(cx) || !isFinite(cy)) return []
+
+    return [{
+      coordinates: ring.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
+      centroid: { latitude: cy, longitude: cx },
+      hasData: (s?.submission_count ?? 0) > 0,
+      count: s?.submission_count ?? 0,
+      normRent,
+      rentRatio,
+      // normRent is already 1BHK-normalised; derive other BHK estimates
+      norm1: normRent,
+      norm2: Math.round(normRent * 1.33),
+      norm3: Math.round(normRent * 1.5),
+      norm4: Math.round(normRent * 1.6),
+      isLocality: true,
+    }]
+  })
+}
+
+/** Build 250m street-level grid from pre-computed server-side stats.
+ *  Skips empty cells — only renders cells with actual submission data.
+ */
+export function buildStreetGridFromStats(
   cityName: string,
-  rentCells: RentCell[],
+  stats: StreetGridStats[],
   cityHull: [number, number][] | null,
-  baselineRent: number,
-  step = GRID_STEP,
-  viewBounds?: { latMin: number; latMax: number; lngMin: number; lngMax: number },
 ): RentFeature[] {
   const cityBounds = CITY_BOUNDS[cityName]
   if (!cityBounds) return []
 
-  const snapDown = (val: number, origin: number, s: number) =>
-    origin + Math.floor((val - origin) / s) * s
-  const bounds = viewBounds ? {
-    latMin: Math.max(cityBounds.latMin, snapDown(viewBounds.latMin, cityBounds.latMin, step)),
-    latMax: Math.min(cityBounds.latMax, viewBounds.latMax),
-    lngMin: Math.max(cityBounds.lngMin, snapDown(viewBounds.lngMin, cityBounds.lngMin, step)),
-    lngMax: Math.min(cityBounds.lngMax, viewBounds.lngMax),
-  } : cityBounds
+  const step = GRID_STEP_250
 
-  // Bucket rent cells by grid position
-  const buckets: Record<string, RentCell[]> = {}
-  for (const rc of rentCells) {
-    const ci = Math.floor((rc.lat - bounds.latMin) / step)
-    const cj = Math.floor((rc.lng - bounds.lngMin) / step)
-    const key = `${ci}|${cj}`
-    if (!buckets[key]) buckets[key] = []
-    buckets[key].push(rc)
-  }
+  const statsMap = new Map<string, StreetGridStats>()
+  for (const s of stats) statsMap.set(`${s.grid_lat}|${s.grid_lng}`, s)
 
   const features: RentFeature[] = []
   let ci = 0
-  for (let lat = bounds.latMin; lat < bounds.latMax; lat += step, ci++) {
+
+  for (let lat = cityBounds.latMin; lat < cityBounds.latMax; lat += step, ci++) {
     const cLat = lat + step / 2
     let cj = 0
-    for (let lng = bounds.lngMin; lng < bounds.lngMax; lng += step, cj++) {
+    for (let lng = cityBounds.lngMin; lng < cityBounds.lngMax; lng += step, cj++) {
       const cLng = lng + step / 2
-      if (cityHull) {
-        const h = step / 2
-        if (!pointInPolygon(cLng, cLat, cityHull)) continue
-      }
 
-      const cellRcs = buckets[`${ci}|${cj}`]
-      let hasData = false, count = 0, normSum = 0, normCount = 0
-      const bhkBuckets: Record<string, number[]> = { '1BHK': [], '2BHK': [], '3BHK': [], '4BHK+': [] }
+      if (cityHull && !pointInPolygon(cLng, cLat, cityHull)) continue
 
-      if (cellRcs) {
-        for (const rc of cellRcs) {
-          hasData = true
-          count += rc.count
-          for (const s of rc.allSubmissions) {
-            const div = BHK_DIVISOR[s.bhk_type] ?? 1.0
-            normSum += s.rent_amount / div
-            normCount++
-            const key = (s.bhk_type === '4BHK' || s.bhk_type === '5BHK') ? '4BHK+' : s.bhk_type
-            if (bhkBuckets[key]) bhkBuckets[key].push(s.rent_amount)
-          }
-        }
-      }
+      const s = statsMap.get(`${ci}|${cj}`)
+      if (!s || (s.submission_count ?? 0) === 0) continue
 
-      const normRent = normCount > 0 ? normSum / normCount : 0
-      const rentRatio = baselineRent > 0 && normRent > 0 ? normRent / baselineRent : 0
-
-      // Only include cells with actual rent data (skip empty cells for performance)
-      if (!hasData) continue
+      const normRent = s.norm_rent ?? 0
+      const rentRatio = s.rent_ratio ?? 0
 
       features.push({
         coordinates: [
@@ -111,72 +123,18 @@ export function buildRentGrid(
           { latitude: lat + step, longitude: lng },
         ],
         centroid: { latitude: cLat, longitude: cLng },
-        hasData, count, normRent, rentRatio,
-        norm1: median(bhkBuckets['1BHK']),
-        norm2: median(bhkBuckets['2BHK']),
-        norm3: median(bhkBuckets['3BHK']),
-        norm4: median(bhkBuckets['4BHK+']),
+        hasData: true,
+        count: s.submission_count,
+        normRent,
+        rentRatio,
+        norm1: normRent,
+        norm2: Math.round(normRent * 1.33),
+        norm3: Math.round(normRent * 1.5),
+        norm4: Math.round(normRent * 1.6),
         isLocality: false,
       })
     }
   }
+
   return features
-}
-
-/** Build locality-level rent polygons from stored Voronoi polygons */
-export function buildLocalityRentFeatures(
-  locs: LocalityRow[],
-  cells: RentCell[],
-  baseline: number,
-): RentFeature[] {
-  const _coordSeen = new Set<string>()
-  const seeds = locs.filter(l => {
-    if (l.level !== 2 || !l.polygon) return false
-    const key = `${l.lat.toFixed(4)},${l.lng.toFixed(4)}`
-    if (_coordSeen.has(key)) return false
-    _coordSeen.add(key)
-    return true
-  })
-  if (seeds.length === 0) return []
-
-  const delaunay = Delaunay.from(seeds, l => l.lng, l => l.lat)
-  const cellData = seeds.map(() => ({
-    hasData: false, count: 0,
-    normSum: 0, normCount: 0,
-    bhkBuckets: { '1BHK': [], '2BHK': [], '3BHK': [], '4BHK+': [] } as Record<string, number[]>,
-  }))
-
-  for (const rc of cells) {
-    const idx = delaunay.find(rc.lng, rc.lat)
-    const cell = cellData[idx]
-    cell.hasData = true
-    cell.count += rc.count
-    for (const s of rc.allSubmissions) {
-      const div = BHK_DIVISOR[s.bhk_type] ?? 1.0
-      cell.normSum += s.rent_amount / div
-      cell.normCount++
-      const key = (s.bhk_type === '4BHK' || s.bhk_type === '5BHK') ? '4BHK+' : s.bhk_type
-      if (cell.bhkBuckets[key]) cell.bhkBuckets[key].push(s.rent_amount)
-    }
-  }
-
-  return seeds.map((seed, i) => {
-    const d = cellData[i]
-    const normRent = d.normCount > 0 ? d.normSum / d.normCount : 0
-    const rentRatio = baseline > 0 && normRent > 0 ? normRent / baseline : 0
-    const ring = seed.polygon!
-    const cx = ring.reduce((s, p) => s + p[0], 0) / ring.length
-    const cy = ring.reduce((s, p) => s + p[1], 0) / ring.length
-
-    return {
-      coordinates: ring.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
-      centroid: { latitude: cy, longitude: cx },
-      hasData: d.hasData, count: d.count, normRent, rentRatio,
-      norm1: median(d.bhkBuckets['1BHK']),
-      norm2: median(d.bhkBuckets['2BHK']),
-      norm3: median(d.bhkBuckets['3BHK']),
-      norm4: median(d.bhkBuckets['4BHK+']),
-      isLocality: true,
-    }
-  })
 }
