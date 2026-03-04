@@ -394,16 +394,6 @@ function MapScreen() {
   }, [cityHull, bounds])
   const showStreetRing = activeLayer === 'rent-street' && zoom >= STREET_MIN_ZOOM
 
-  // Debounce showLabels so many Markers don't mount/unmount simultaneously on zoom.
-  // Street layer labels also gated on STREET_MIN_ZOOM to match polygon visibility.
-  const [showLabels, setShowLabels] = useState(false)
-  useEffect(() => {
-    const streetOk = activeLayer !== 'rent-street' || zoom >= STREET_MIN_ZOOM
-    const t = setTimeout(() => {
-      setShowLabels(zoom > 10 && streetOk)
-    }, 200)
-    return () => clearTimeout(t)
-  }, [zoom, activeLayer])
 
   // Queued layer change — if switching in progress, queue the latest request
   const handleLayerChange = useCallback((layer: ActiveLayer) => {
@@ -492,8 +482,6 @@ function MapScreen() {
             features={rentFeatures}
             rentMin={rentMin}
             rentMax={rentMax}
-            showLabels={showLabels}
-            zoom={zoom}
           />
 
           {/* Layer 3: Outside city dim — always mounted, transparent when not on rent layer. */}
