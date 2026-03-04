@@ -5,19 +5,23 @@ import { formatRentShort } from '@/lib/mapUtils'
 import { BHK_COLORS } from '@/constants/mapStyles'
 import type { Vacancy } from '@/hooks/useVacancies'
 
+const NULL_COORD = { latitude: 0.001, longitude: 0.001 }
+
 type Props = {
   vacancy: Vacancy
   onPress: (vacancy: Vacancy) => void
+  hidden?: boolean
 }
 
-export const VacancyMarker = memo(function VacancyMarker({ vacancy, onPress }: Props) {
+export const VacancyMarker = memo(function VacancyMarker({ vacancy, onPress, hidden }: Props) {
   const color = BHK_COLORS[vacancy.bhk_type] ?? '#3b82f6'
 
   return (
     <Marker
-      coordinate={{ latitude: vacancy.lat, longitude: vacancy.lng }}
-      onPress={() => onPress(vacancy)}
+      coordinate={hidden ? NULL_COORD : { latitude: vacancy.lat, longitude: vacancy.lng }}
+      onPress={hidden ? undefined : () => onPress(vacancy)}
       tracksViewChanges={false}
+      opacity={hidden ? 0 : 1}
     >
       <View style={[styles.pill, { backgroundColor: color }]}>
         <Text style={styles.text}>{formatRentShort(vacancy.asking_rent)}</Text>

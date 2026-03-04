@@ -37,11 +37,13 @@ export type RentFeature = {
 }
 
 /** Build locality-level rent polygons from pre-computed server-side stats.
- *  Joins locality polygon geometry with locality_rent_stats by name.
+ *  Uses the Voronoi polygon stored in the DB (l.polygon) — already computed
+ *  server-side with sinusoidal smoothing. Just joins stats by locality name.
  */
 export function buildLocalityRentFromStats(
   locs: LocalityRow[],
   stats: LocalityRentStats[],
+  cityHull?: [number, number][] | null,
 ): RentFeature[] {
   const statsMap = new Map<string, LocalityRentStats>()
   for (const s of stats) statsMap.set(s.locality_name, s)
@@ -55,18 +57,22 @@ export function buildLocalityRentFromStats(
     return true
   })
 
-  return seeds.flatMap(seed => {
+  const features: RentFeature[] = []
+
+  for (const seed of seeds) {
     const ring = seed.polygon!
-    if (!ring || ring.length < 3) return []
+    if (!ring || ring.length < 3) continue
+
+    // Compute centroid from polygon ring
+    const cx = ring.reduce((sum, p) => sum + p[0], 0) / ring.length
+    const cy = ring.reduce((sum, p) => sum + p[1], 0) / ring.length
+    if (!isFinite(cx) || !isFinite(cy)) continue
 
     const s = statsMap.get(seed.name)
     const normRent = s?.norm_rent ?? 0
     const rentRatio = s?.rent_ratio ?? 0
-    const cx = ring.reduce((sum, p) => sum + p[0], 0) / ring.length
-    const cy = ring.reduce((sum, p) => sum + p[1], 0) / ring.length
-    if (!isFinite(cx) || !isFinite(cy)) return []
 
-    return [{
+    features.push({
       id: `loc:${seed.name}`,
       coordinates: ring.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
       centroid: { latitude: cy, longitude: cx },
@@ -74,14 +80,15 @@ export function buildLocalityRentFromStats(
       count: s?.submission_count ?? 0,
       normRent,
       rentRatio,
-      // normRent is already 1BHK-normalised; derive other BHK estimates
       norm1: normRent,
       norm2: Math.round(normRent * 1.33),
       norm3: Math.round(normRent * 1.5),
       norm4: Math.round(normRent * 1.6),
       isLocality: true,
-    }]
-  })
+    })
+  }
+
+  return features
 }
 
 /** Build 250m street-level grid from pre-computed server-side stats.

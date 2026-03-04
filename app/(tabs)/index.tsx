@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator, InteractionManager } from 'react-native'
+import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator } from 'react-native'
 import MapView, { Region, PROVIDER_GOOGLE, Polygon } from 'react-native-maps'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -21,9 +21,10 @@ import { Spacing, Typography, Radius } from '@/constants/theme'
 import { supabase } from '@/lib/supabase'
 import { formatRent } from '@/lib/vacancyUtils'
 
-import { VacancyMarker, ClusterMarker } from '@/components/map/VacancyMarker'
+import { VacancyMarker } from '@/components/map/VacancyMarker'
 import VacancyDetailSheet from '@/components/map/VacancyDetailSheet'
 import { RentPolygons } from '@/components/map/RentPolygons'
+import { LocalityPolygons } from '@/components/map/LocalityPolygons'
 import { CityMask } from '@/components/map/CityMask'
 import LayerToggleBar from '@/components/map/LayerToggleBar'
 import RentSlider from '@/components/map/RentSlider'
@@ -299,7 +300,7 @@ function MapScreen() {
     userId: user?.id,
   })
 
-  const { localities, localityStats, streetGridStats, loading: rentLoading } = useRentData(cityName, bounds)
+  const { localities, localityStats, streetGridStats } = useRentData(cityName, bounds)
 
   // Rent features
   const cityHull = useMemo(() => getCityClipPolygon(cityName, localities), [cityName, localities])
@@ -326,16 +327,19 @@ function MapScreen() {
     return () => clearTimeout(t)
   }, [region])
 
+  // Locality features — loaded once from DB, static. Always computed regardless of layer
+  // so LocalityPolygons stays mounted with stable features (just toggles visibility via activeLayer prop).
+  const localityFeatures = useMemo(() => {
+    return buildLocalityRentFromStats(localities, localityStats, cityHull)
+  }, [localities, localityStats, cityHull])
+
+  // Street grid features — viewport-filtered, pool-based rendering.
   const rentFeatures = useMemo(() => {
-    if (activeLayer === 'none' || activeLayer === 'rent-raw') return []
-    if (activeLayer === 'rent-locality') {
-      return buildLocalityRentFromStats(localities, localityStats)
-    }
+    if (activeLayer !== 'rent-street') return []
     if (!cityHull || !bounds) return []
     const vpZoom = Math.log2(360 / (viewportRegion.longitudeDelta || 0.01))
     if (vpZoom < STREET_MIN_ZOOM) return []
     // 1.5× buffer so cells stay visible beyond viewport edges while panning (no blink).
-    // Pool-based rendering means extra cells are just prop updates — no crash risk.
     const latHalf = (viewportRegion.latitudeDelta / 2) * 1.5
     const lngHalf = (viewportRegion.longitudeDelta / 2) * 1.5
     const vLatMin = viewportRegion.latitude - latHalf
@@ -349,7 +353,7 @@ function MapScreen() {
           && cellLng >= vLngMin && cellLng <= vLngMax
     })
     return buildStreetGridFromStats(cityName, viewportStats, cityHull)
-  }, [activeLayer, viewportRegion, localities, localityStats, streetGridStats, cityName, cityHull, bounds])
+  }, [activeLayer, viewportRegion, streetGridStats, cityName, cityHull, bounds])
 
   // Pool-based rendering: no mount/unmount on layer switch or viewport pan.
   // isSwitching just drives the spinner and queued layer processing.
@@ -396,9 +400,7 @@ function MapScreen() {
   useEffect(() => {
     const streetOk = activeLayer !== 'rent-street' || zoom >= STREET_MIN_ZOOM
     const t = setTimeout(() => {
-      const next = zoom > 10 && streetOk
-      console.log('[RentMap] showLabels:', next, 'zoom:', zoom.toFixed(2))
-      setShowLabels(next)
+      setShowLabels(zoom > 10 && streetOk)
     }, 200)
     return () => clearTimeout(t)
   }, [zoom, activeLayer])
@@ -459,32 +461,48 @@ function MapScreen() {
           showsCompass={false}
           customMapStyle={DARK_MAP_STYLE}
         >
-          {/* Layer 1: Street grey background — single hull polygon so empty grid
-               areas look grey (locality grey comes from no-data locality polygons) */}
-          {showStreetRing && streetGreyRingCoords && (
+          {/* Layer 1: City hull background — single always-mounted polygon (never add/remove).
+               Locality: subtle grey so Voronoi gaps show grey not transparent.
+               Street: stronger grey for empty grid areas.
+               None / switching: transparent. */}
+          {streetGreyRingCoords && (
             <Polygon
               coordinates={streetGreyRingCoords}
-              fillColor="rgba(148, 163, 184, 0.35)"
-              strokeColor="rgba(148, 163, 184, 0.4)"
+              fillColor={
+                showStreetRing ? 'rgba(148, 163, 184, 0.35)'
+                : activeLayer === 'rent-locality' ? 'rgba(148, 163, 184, 0.18)'
+                : 'rgba(0,0,0,0)'
+              }
+              strokeColor={showStreetRing ? 'rgba(148, 163, 184, 0.4)' : 'rgba(0,0,0,0)'}
               strokeWidth={1}
             />
           )}
 
-          {/* Layer 2: Data polygons — always rendered (fixed pool, never mounts/unmounts).
-               Empty features = all slots invisible at null island. No native view churn. */}
-          <RentPolygons
-            features={showRentLayer ? rentFeatures : []}
+          {/* Layer 2a: Locality polygons — static, always mounted, <200 polygons from DB.
+               Visibility toggled via activeLayer prop (color → transparent when inactive). */}
+          <LocalityPolygons
+            features={localityFeatures}
+            activeLayer={activeLayer}
             rentMin={rentMin}
             rentMax={rentMax}
-            showLabels={showLabels && activeLayer === 'rent-locality'}
           />
 
-          {/* Layer 3: Outside city dim — on top of all polygons */}
-          {showRentLayer && <CityMask cityHull={cityHull} bounds={bounds} />}
+          {/* Layer 2b: Street grid — pool-based (120 slots), viewport-filtered. */}
+          <RentPolygons
+            features={rentFeatures}
+            rentMin={rentMin}
+            rentMax={rentMax}
+            showLabels={showLabels}
+            zoom={zoom}
+          />
 
-          {/* Vacancy markers */}
-          {!showRentLayer && filteredVacancies.map(v => (
-            <VacancyMarker key={v.id} vacancy={v} onPress={handleVacancyPress} />
+          {/* Layer 3: Outside city dim — always mounted, transparent when not on rent layer. */}
+          <CityMask cityHull={cityHull} bounds={bounds} visible={showRentLayer} />
+
+          {/* Vacancy markers — always mounted (never add/remove native views).
+               Hidden by moving to null island + opacity 0 when rent layer is active. */}
+          {filteredVacancies.map(v => (
+            <VacancyMarker key={v.id} vacancy={v} onPress={handleVacancyPress} hidden={showRentLayer} />
           ))}
         </MapView>
 

@@ -19,14 +19,18 @@ const NULL_COORDS = [
   { latitude: 0.0012, longitude: 0.0010 },
 ]
 
+// No-data fill — subtle grey matching web
+const NODATA_FILL = 'rgba(148, 163, 184, 0.18)'
+
 type Props = {
   features: RentFeature[]
   rentMin: number
   rentMax: number
   showLabels: boolean
+  zoom: number
 }
 
-export const RentPolygons = memo(function RentPolygons({ features, rentMin, rentMax, showLabels }: Props) {
+export const RentPolygons = memo(function RentPolygons({ features, rentMin, rentMax, showLabels, zoom }: Props) {
   const slots = useMemo(() => {
     return Array.from({ length: POOL_SIZE }, (_, i) => {
       const f = features[i]
@@ -34,7 +38,7 @@ export const RentPolygons = memo(function RentPolygons({ features, rentMin, rent
         coords: NULL_COORDS,
         fill: 'rgba(0,0,0,0)',
         stroke: 'rgba(0,0,0,0)',
-        label: null as null | { centroid: { latitude: number; longitude: number }; text: string; sub: string },
+        label: null as null | { centroid: { latitude: number; longitude: number }; lines: string[] },
       }
 
       const hasRent = f.hasData && f.normRent > 0
@@ -42,18 +46,18 @@ export const RentPolygons = memo(function RentPolygons({ features, rentMin, rent
         ? Math.max(0, Math.min(1, (f.normRent - rentMin) / (rentMax - rentMin)))
         : 0.5
 
+      const label = null
+
+      const fill = hasRent ? rentRatioColor(0.5 + t, undefined) : NODATA_FILL
+      const stroke = hasRent ? rentRatioColor(0.5 + t, 0.8) : 'rgba(148, 163, 184, 0.2)'
       return {
         coords: f.coordinates,
-        fill: hasRent ? rentRatioColor(0.5 + t, undefined) : 'rgba(148, 163, 184, 0.35)',
-        stroke: hasRent ? rentRatioColor(0.5 + t, 0.8) : 'rgba(148, 163, 184, 0.4)',
-        label: (showLabels && hasRent) ? {
-          centroid: f.centroid,
-          text: formatRentShort(f.normRent),
-          sub: f.norm1 > 0 ? `1BHK ${formatRentShort(f.norm1)}` : '',
-        } : null,
+        fill,
+        stroke,
+        label,
       }
     })
-  }, [features, rentMin, rentMax, showLabels])
+  }, [features, rentMin, rentMax, showLabels, zoom])
 
   return (
     <>
@@ -72,8 +76,9 @@ export const RentPolygons = memo(function RentPolygons({ features, rentMin, rent
               anchor={{ x: 0.5, y: 0.5 }}
             >
               <View style={styles.label}>
-                {s.label.sub ? <Text style={styles.labelSub}>{s.label.sub}</Text> : null}
-                <Text style={styles.labelText}>{s.label.text}</Text>
+                {s.label.lines.map((line, j) => (
+                  <Text key={j} style={j === 0 ? styles.labelMain : styles.labelSub}>{line}</Text>
+                ))}
               </View>
             </Marker>
           )}
@@ -85,21 +90,21 @@ export const RentPolygons = memo(function RentPolygons({ features, rentMin, rent
 
 const styles = StyleSheet.create({
   label: {
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 4,
-    paddingVertical: 2,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    paddingHorizontal: 5,
+    paddingVertical: 3,
     borderRadius: 4,
+    alignItems: 'flex-start',
+  },
+  labelMain: {
+    color: '#1e293b',
+    fontSize: 11,
+    fontWeight: '700',
   },
   labelSub: {
-    color: 'rgba(255,255,255,0.75)',
-    fontSize: 8,
-    textAlign: 'center',
-    marginBottom: 1,
-  },
-  labelText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700',
-    textAlign: 'center',
+    color: '#475569',
+    fontSize: 9,
+    fontWeight: '500',
+    marginTop: 1,
   },
 })
