@@ -25,6 +25,7 @@ import { VacancyMarkerPool } from '@/components/map/VacancyMarkerPool'
 import { buildClusterMap } from '@/lib/clusterVacancies'
 import VacancyDetailSheet from '@/components/map/VacancyDetailSheet'
 import { RentPolygons } from '@/components/map/RentPolygons'
+import { RentGridLabels } from '@/components/map/RentGridLabels'
 import { LocalityPolygons } from '@/components/map/LocalityPolygons'
 import { CityMask } from '@/components/map/CityMask'
 import LayerToggleBar from '@/components/map/LayerToggleBar'
@@ -496,6 +497,7 @@ function MapScreen() {
           showsUserLocation
           showsMyLocationButton={false}
           showsCompass={false}
+          maxZoomLevel={activeLayer === 'rent-street' ? 17 : 20}
           customMapStyle={DARK_MAP_STYLE}
         >
           {/* Layer 1: City hull background — single always-mounted polygon (never add/remove).
@@ -529,6 +531,13 @@ function MapScreen() {
             features={rentFeatures}
             rentMin={rentMin}
             rentMax={rentMax}
+          />
+
+          {/* Layer 2c: Street grid labels — rent value at each cell centroid. */}
+          <RentGridLabels
+            features={rentFeatures}
+            visible={activeLayer === 'rent-street'}
+            showAllBhk={zoom >= 16}
           />
 
           {/* Layer 3: Outside city dim — always mounted, transparent when not on rent layer. */}
