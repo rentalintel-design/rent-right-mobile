@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 export type Profile = {
   user_id: string
   phone: string | null
+  email: string | null
   role: 'tenant' | 'landlord' | null
   name: string | null
   city: string | null
@@ -39,13 +40,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   const fetchProfile = useCallback(async (uid: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('user_id', uid)
-      .single()
-    console.log('[profile]', data, error)
-    setProfile(data as Profile | null)
+    const [{ data }, { data: { user: authUser } }] = await Promise.all([
+      supabase.from('profiles').select('*').eq('user_id', uid).single(),
+      supabase.auth.getUser(),
+    ])
+    console.log('[profile]', data)
+    if (data) {
+      // Merge email from auth user (Google OAuth / email OTP)
+      setProfile({ ...data, email: authUser?.email ?? data.email ?? null } as Profile)
+    } else {
+      setProfile(null)
+    }
   }, [])
 
   const refreshProfile = useCallback(async () => {

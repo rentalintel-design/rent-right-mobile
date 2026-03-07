@@ -4,7 +4,12 @@ import { Stack, router, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as SplashScreen from 'expo-splash-screen'
 import * as Linking from 'expo-linking'
+import * as WebBrowser from 'expo-web-browser'
 import 'react-native-reanimated'
+import { supabase } from '@/lib/supabase'
+
+// Required for iOS OAuth redirect to complete properly
+WebBrowser.maybeCompleteAuthSession()
 
 import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { usePushToken } from '@/hooks/usePushToken'
@@ -38,9 +43,18 @@ function RootNavigator() {
 
   // Deep link handler
   useEffect(() => {
-    function handleDeepLink(event: { url: string }) {
+    async function handleDeepLink(event: { url: string }) {
       const url = event.url
       try {
+        // Handle OAuth callback (code exchange for session)
+        if (url.includes('code=')) {
+          const codeMatch = url.match(/[?&]code=([^&]+)/)
+          if (codeMatch) {
+            await supabase.auth.exchangeCodeForSession(codeMatch[1])
+            return
+          }
+        }
+
         const parsed = new URL(url)
         const path = parsed.pathname
 

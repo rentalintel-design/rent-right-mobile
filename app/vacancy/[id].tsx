@@ -247,31 +247,59 @@ export default function VacancyDetailScreen() {
             </View>
           )}
 
-          {/* Contact section */}
+          {/* Contact section — only for registered landlords (not anonymous posts) */}
+          {vacancy?.user_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(vacancy.user_id) && vacancy.user_id !== user?.id && (
           <View style={[styles.section, styles.contactBox, { backgroundColor: c.bgSurface, borderColor: c.border }]}>
             <Text style={[Typography.subtitle, { color: c.text1, marginBottom: Spacing.md }]}>Contact Landlord</Text>
             <Pressable
               style={[styles.chatBtn, { backgroundColor: c.accent }]}
               onPress={async () => {
                 if (!user?.id || !vacancy) return
+                // Vacancies posted anonymously (user_id = 'anonymous') can't be messaged
+                const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+                if (!vacancy.user_id || !UUID_RE.test(vacancy.user_id)) {
+                  Alert.alert('Not available', 'This vacancy was posted anonymously and cannot be contacted directly.')
+                  return
+                }
+                // Can't message your own vacancy
+                if (vacancy.user_id === user.id) {
+                  Alert.alert('This is your vacancy', 'You cannot message yourself.')
+                  return
+                }
+                // Check for existing conversation
                 const { data: existing } = await supabase
                   .from('conversations')
                   .select('id')
                   .eq('tenant_id', user.id)
                   .eq('vacancy_id', vacancy.id)
-                  .single()
+                  .maybeSingle()
                 if (existing?.id) { router.push(`/chat/${existing.id}`); return }
-                const { data: created } = await supabase
+                // Fetch tenant profile to populate conversation metadata
+                const { data: tenantProfile } = await supabase
+                  .from('profiles').select('name, phone').eq('user_id', user.id).maybeSingle()
+                const { data: created, error } = await supabase
                   .from('conversations')
-                  .insert({ tenant_id: user.id, landlord_id: vacancy.user_id, vacancy_id: vacancy.id })
+                  .insert({
+                    tenant_id: user.id,
+                    landlord_id: vacancy.user_id,
+                    vacancy_id: vacancy.id,
+                    city: (vacancy as any).city ?? null,
+                    tenant_name: tenantProfile?.name ?? null,
+                    tenant_phone: tenantProfile?.phone ?? null,
+                  })
                   .select('id')
                   .single()
+                if (error) {
+                  Alert.alert('Error', 'Could not start conversation. Please try again.')
+                  return
+                }
                 if (created?.id) router.push(`/chat/${created.id}`)
               }}
             >
               <Text style={[Typography.subtitle, { color: '#fff' }]}>💬 Message Landlord</Text>
             </Pressable>
           </View>
+          )}
         </View>
       </ScrollView>
 

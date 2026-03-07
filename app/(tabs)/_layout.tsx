@@ -22,6 +22,13 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
+          title: 'Home',
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="house.fill" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="map"
+        options={{
           title: 'Map',
           tabBarIcon: ({ color }) => <IconSymbol size={24} name="map.fill" color={color} />,
         }}
@@ -29,15 +36,14 @@ export default function TabLayout() {
       <Tabs.Screen
         name="vacancies"
         options={{
-          title: 'Vacancies',
+          title: 'Listings',
           tabBarIcon: ({ color }) => <IconSymbol size={24} name="building.2.fill" color={color} />,
         }}
       />
       <Tabs.Screen
         name="vault"
         options={{
-          title: 'Vault',
-          tabBarIcon: ({ color }) => <IconSymbol size={24} name="shield.fill" color={color} />,
+          href: null,
         }}
       />
       <Tabs.Screen

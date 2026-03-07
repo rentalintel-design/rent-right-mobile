@@ -1,7 +1,7 @@
 import React from 'react'
 import { View, Text, Pressable, StyleSheet } from 'react-native'
 import { useColors } from '@/hooks/use-theme-color'
-import { Spacing, Radius, Typography } from '@/constants/theme'
+import { Spacing, Typography } from '@/constants/theme'
 import type { ActiveLayer } from 'rent-right-shared'
 
 type Props = {
@@ -12,7 +12,7 @@ type Props = {
 }
 
 const LAYERS: { key: ActiveLayer; label: string; icon: string; locked?: boolean }[] = [
-  { key: 'none', label: 'None', icon: '✕' },
+  { key: 'none', label: 'Vacancies', icon: '📍' },
   { key: 'rent-locality', label: 'Locality', icon: '🗺' },
   { key: 'rent-street', label: 'Street', icon: '📡', locked: true },
   { key: 'rent-raw', label: 'History', icon: '📌', locked: true },
@@ -58,8 +58,7 @@ export default function LayerToggleBar({ activeLayer, onChangeLayer, hasContribu
 const styles = StyleSheet.create({
   bar: {
     flexDirection: 'row',
-    borderRadius: Radius.md,
-    borderWidth: 1,
+    borderTopWidth: 1,
     overflow: 'hidden',
   },
   btn: {
@@ -67,7 +66,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: Spacing.sm,
+    paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.xs,
     gap: 3,
   },

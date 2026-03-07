@@ -1,746 +1,476 @@
-import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator, Alert } from 'react-native'
-import MapView, { Region, PROVIDER_GOOGLE, Polygon } from 'react-native-maps'
-import { GestureHandlerRootView } from 'react-native-gesture-handler'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import React, { useState, useEffect, useCallback } from 'react'
+import {
+  View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator,
+} from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { useFocusEffect } from '@react-navigation/native'
 import { router } from 'expo-router'
-import { CITY_BOUNDS, GRID_STEP_250 } from 'rent-right-shared'
-import type { ActiveLayer } from 'rent-right-shared'
+import { CITY_BOUNDS } from 'rent-right-shared'
 
 import { useAuth } from '@/context/AuthContext'
 import { useColors } from '@/hooks/use-theme-color'
-import { useVacancies } from '@/hooks/useVacancies'
-import { useRentData } from '@/hooks/useRentData'
 import { useMembership } from '@/hooks/useMembership'
-import { buildLocalityRentFromStats, buildStreetGridFromStats } from '@/lib/rentGrid'
-import { getCityClipPolygon } from '@/lib/mapUtils'
-import { DARK_MAP_STYLE } from '@/constants/mapStyles'
-import { Spacing, Typography, Radius } from '@/constants/theme'
 import { supabase } from '@/lib/supabase'
-import { formatRent } from '@/lib/vacancyUtils'
+import { Spacing, Radius } from '@/constants/theme'
 
-import { VacancyMarkerPool } from '@/components/map/VacancyMarkerPool'
-import { buildClusterMap } from '@/lib/clusterVacancies'
-import VacancyDetailSheet from '@/components/map/VacancyDetailSheet'
-import { RentPolygons } from '@/components/map/RentPolygons'
-import { RentGridLabels } from '@/components/map/RentGridLabels'
-import { LocalityPolygons } from '@/components/map/LocalityPolygons'
-import { CityMask } from '@/components/map/CityMask'
-import LayerToggleBar from '@/components/map/LayerToggleBar'
-import RentSlider from '@/components/map/RentSlider'
-import MapSearchBar from '@/components/map/MapSearchBar'
-import FiltersSheet from '@/components/map/FiltersSheet'
-import LocateButton from '@/components/map/LocateButton'
+// ─── City data (mirrors web CITIES + CITY_META) ───────────────────────────────
 
-import type { BhkFilter, RentFilter, SourceFilter, FurnishingFilter, Vacancy } from '@/hooks/useVacancies'
-
-// ─── Landlord Dashboard ───────────────────────────────────────────────────────
-
-type LandlordStats = {
-  total: number
-  active: number
-  draft: number
-  booked: number
+type CityInfo = {
+  name: string
+  label: string
+  abbr: string
+  tagline: string
+  accentColor: string   // border-top + abbr text + live dot
+  accentBg: string      // abbr chip background
+  active: boolean
 }
 
-function LandlordDashboard() {
+const CITIES: CityInfo[] = [
+  {
+    name: 'bengaluru', label: 'Bengaluru', abbr: 'BLR',
+    tagline: 'Silicon Valley of India',
+    accentColor: '#22c55e', accentBg: 'rgba(16,185,129,0.15)', active: true,
+  },
+  {
+    name: 'pune', label: 'Pune', abbr: 'PUN',
+    tagline: 'Oxford of the East',
+    accentColor: '#60a5fa', accentBg: 'rgba(37,99,235,0.18)', active: true,
+  },
+  {
+    name: 'hyderabad', label: 'Hyderabad', abbr: 'HYD',
+    tagline: 'City of Pearls',
+    accentColor: '#f59e0b', accentBg: 'rgba(245,158,11,0.15)', active: true,
+  },
+  {
+    name: 'gurugram', label: 'Gurugram', abbr: 'GGN',
+    tagline: 'Millennium City',
+    accentColor: '#7896b4', accentBg: 'rgba(120,150,180,0.15)', active: true,
+  },
+  {
+    name: 'chennai', label: 'Chennai', abbr: 'CHN',
+    tagline: 'Gateway of South India',
+    accentColor: '#ef4444', accentBg: 'rgba(239,68,68,0.15)', active: true,
+  },
+  {
+    name: 'mumbai', label: 'Mumbai', abbr: 'MUM',
+    tagline: 'City of Dreams',
+    accentColor: '#a78bfa', accentBg: 'rgba(139,92,246,0.15)', active: true,
+  },
+]
+
+// ─── Colour constants matching web ────────────────────────────────────────────
+const ACCENT_BG      = 'rgba(37,99,235,0.18)'
+const ACCENT_TEXT    = '#60a5fa'
+const GREEN_BG       = 'rgba(16,185,129,0.15)'
+const PURPLE_BG      = 'rgba(139,92,246,0.15)'
+const PURPLE_COLOR   = '#a78bfa'
+const GREEN_COLOR    = '#22c55e'
+
+// ─── Home Screen ──────────────────────────────────────────────────────────────
+
+export default function HomeScreen() {
   const c = useColors()
-  const insets = useSafeAreaInsets()
-  const { user, profile } = useAuth()
-  const { canPostAsLandlord } = useMembership(user?.id)
-  const [stats, setStats] = useState<LandlordStats>({ total: 0, active: 0, draft: 0, booked: 0 })
-  const [recentListings, setRecentListings] = useState<Vacancy[]>([])
-  const [loading, setLoading] = useState(true)
+  const { user, profile, refreshProfile } = useAuth()
+  const membership = useMembership(user?.id)
 
-  const fetchData = useCallback(async () => {
-    if (!user?.id) return
-    const { data } = await supabase
-      .from('vacancies')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(5)
-    if (data) {
-      setRecentListings(data as Vacancy[])
-      const all = data as Vacancy[]
-      setStats({
-        total: all.length,
-        active: all.filter(v => (v as any).status === 'active').length,
-        draft: all.filter(v => (v as any).status === 'draft').length,
-        booked: all.filter(v => (v as any).status === 'booked').length,
-      })
+  const [totalSubmissions, setTotalSubmissions] = useState<number | null>(null)
+  const [cityVacancyCounts, setCityVacancyCounts] = useState<Record<string, number>>({})
+  const [statsLoading, setStatsLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      const { count: rentCount } = await supabase
+        .from('rent_submissions')
+        .select('*', { count: 'exact', head: true })
+      setTotalSubmissions(rentCount ?? 0)
+
+      const now = new Date().toISOString()
+      const counts: Record<string, number> = {}
+      await Promise.all(
+        CITIES.filter(ct => ct.active).map(async (city) => {
+          const b = CITY_BOUNDS[city.name]
+          if (!b) return
+          const { count } = await supabase
+            .from('vacancies')
+            .select('*', { count: 'exact', head: true })
+            .eq('is_active', true)
+            .eq('status', 'active')
+            .gt('expires_at', now)
+            .gte('lat', b.latMin).lte('lat', b.latMax)
+            .gte('lng', b.lngMin).lte('lng', b.lngMax)
+          counts[city.name] = count ?? 0
+        })
+      )
+      setCityVacancyCounts(counts)
+      setStatsLoading(false)
     }
-    setLoading(false)
-  }, [user?.id])
+    fetchStats()
+  }, [])
 
-  useFocusEffect(useCallback(() => { fetchData() }, [fetchData]))
+  const handleCityPress = useCallback(async (cityName: string) => {
+    if (user?.id && profile?.city !== cityName) {
+      await supabase.from('profiles').update({ city: cityName }).eq('user_id', user.id)
+      await refreshProfile()
+    }
+    router.push('/(tabs)/map')
+  }, [user?.id, profile?.city, refreshProfile])
 
-  const STATUS_COLORS: Record<string, { label: string; color: string }> = {
-    draft: { label: 'Draft', color: '#9ca3af' },
-    active: { label: 'Active', color: '#22c55e' },
-    booked: { label: 'Booked', color: '#fb923c' },
-    rented_out: { label: 'Rented', color: '#3b82f6' },
-  }
+  const canPost      = membership.canPostAsLandlord
+  const hasTenantPlan = membership.isTenantCoreActive
 
   return (
-    <SafeAreaView style={[{ flex: 1, backgroundColor: c.bgPage }]} edges={['top']}>
-      <ScrollView contentContainerStyle={{ padding: Spacing.base, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={{ marginBottom: Spacing.lg }}>
-          <Text style={[Typography.title, { color: c.text1 }]}>Dashboard</Text>
-          <Text style={[Typography.caption, { color: c.text3, marginTop: 2 }]}>
-            {profile?.city ?? 'Your city'} · Landlord
-          </Text>
-        </View>
+    <SafeAreaView style={[s.safe, { backgroundColor: c.bgPage }]} edges={['top']}>
+      <ScrollView
+        contentContainerStyle={s.scroll}
+        showsVerticalScrollIndicator={false}
+      >
 
-        {/* Quick action */}
-        <Pressable
-          style={[dashStyles.postBtn, { backgroundColor: c.accent }]}
-          onPress={() => router.push('/vacancy/create')}
-        >
-          <Text style={[Typography.subtitle, { color: '#fff' }]}>+ Post a Vacancy</Text>
-        </Pressable>
-
-        {/* Stats */}
-        <View style={dashStyles.statsGrid}>
-          {[
-            { label: 'Total', value: stats.total, color: c.text1 },
-            { label: 'Active', value: stats.active, color: '#22c55e' },
-            { label: 'Draft', value: stats.draft, color: '#9ca3af' },
-            { label: 'Booked', value: stats.booked, color: '#fb923c' },
-          ].map(s => (
-            <View key={s.label} style={[dashStyles.statCard, { backgroundColor: c.bgSurface, borderColor: c.border }]}>
-              <Text style={[Typography.title, { color: s.color, fontSize: 28 }]}>{s.value}</Text>
-              <Text style={[Typography.caption, { color: c.text3 }]}>{s.label}</Text>
+        {/* ── Hero band — dot-pattern background ────────────────────────────── */}
+        <View style={s.hero}>
+          {/* Logo + wordmark */}
+          <View style={s.heroRow}>
+            <View style={[s.logoBox, { backgroundColor: c.accent }]}>
+              {/* Simple home SVG approximated as text */}
+              <Text style={s.logoGlyph}>⌂</Text>
             </View>
-          ))}
+            <Text style={[s.wordmark, { color: c.text1 }]}>Rent Right</Text>
+          </View>
+
+          {/* Headline */}
+          <Text style={[s.headline, { color: '#ffffff' }]}>
+            Rental intelligence{'\n'}for Indian cities
+          </Text>
+
+          {/* Live data badge */}
+          {totalSubmissions !== null && totalSubmissions > 0 && (
+            <View style={[s.dataBadge, { backgroundColor: ACCENT_BG }]}>
+              {/* Mini bar-chart icon */}
+              <Text style={{ fontSize: 11 }}>📊</Text>
+              <Text style={[s.dataBadgeText, { color: ACCENT_TEXT }]}>
+                {totalSubmissions.toLocaleString()} rent data points
+              </Text>
+            </View>
+          )}
         </View>
 
-        {/* Recent listings */}
-        <Text style={[Typography.subtitle, { color: c.text1, marginBottom: Spacing.sm, marginTop: Spacing.lg }]}>
-          Recent Listings
-        </Text>
-
-        {loading ? (
-          <ActivityIndicator color={c.accent} style={{ marginTop: Spacing.lg }} />
-        ) : recentListings.length === 0 ? (
-          <View style={[dashStyles.emptyCard, { backgroundColor: c.bgSurface, borderColor: c.border }]}>
-            <Text style={[Typography.body, { color: c.text3, textAlign: 'center' }]}>
-              No listings yet.{'\n'}Post your first vacancy to get started.
-            </Text>
-          </View>
-        ) : (
-          recentListings.map(v => {
-            const anyV = v as any
-            const statusInfo = STATUS_COLORS[anyV.status ?? 'draft'] ?? STATUS_COLORS.draft
-            return (
-              <Pressable
-                key={v.id}
-                style={[dashStyles.listingRow, { backgroundColor: c.bgSurface, borderColor: c.border }]}
-                onPress={() => router.push(`/vacancy/${v.id}`)}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={[Typography.subtitle, { color: c.text1 }]} numberOfLines={1}>
-                    {anyV.bhk_type ?? anyV.property_type ?? 'Listing'}
-                  </Text>
-                  <Text style={[Typography.caption, { color: c.text3 }]} numberOfLines={1}>
-                    {anyV.locality ?? anyV.property_address ?? v.city}
-                  </Text>
-                  {anyV.asking_rent && (
-                    <Text style={[Typography.caption, { color: c.accent, marginTop: 2 }]}>
-                      {formatRent(anyV.asking_rent)}/mo
-                    </Text>
-                  )}
-                </View>
-                <View style={[dashStyles.statusBadge, { backgroundColor: statusInfo.color + '20' }]}>
-                  <Text style={[Typography.caption, { color: statusInfo.color, fontSize: 11 }]}>
-                    {statusInfo.label}
-                  </Text>
-                </View>
-              </Pressable>
-            )
-          })
-        )}
-
-        {recentListings.length > 0 && (
+        {/* ── Dashboard card ────────────────────────────────────────────────── */}
+        <View style={s.px}>
           <Pressable
-            style={[dashStyles.viewAllBtn, { borderColor: c.border }]}
+            style={[s.rowCard, { backgroundColor: c.bgSubtle, borderColor: c.border }]}
+            onPress={() => router.push('/dashboard')}
+          >
+            <View style={[s.rowIcon, { backgroundColor: ACCENT_BG, borderColor: 'rgba(37,99,235,0.25)', borderWidth: 1 }]}>
+              <Text style={{ fontSize: 17 }}>📊</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.rowTitle, { color: c.text1 }]}>Dashboard</Text>
+              <Text style={[s.rowSub, { color: c.text4 }]}>Rent tracking &amp; tenancy</Text>
+            </View>
+            <Text style={[s.chevron, { color: c.text4 }]}>›</Text>
+          </Pressable>
+        </View>
+
+        {/* ── Vault card ────────────────────────────────────────────────────── */}
+        <View style={[s.px, { marginTop: Spacing.sm }]}>
+          <Pressable
+            style={[s.rowCard, { backgroundColor: c.bgSubtle, borderColor: c.border }]}
+            onPress={() => router.push('/(tabs)/vault')}
+          >
+            <View style={[s.rowIcon, { backgroundColor: PURPLE_BG, borderColor: 'rgba(139,92,246,0.25)', borderWidth: 1 }]}>
+              <Text style={{ fontSize: 17 }}>🛡️</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.rowTitle, { color: c.text1 }]}>The Vault</Text>
+              <Text style={[s.rowSub, { color: c.text4 }]}>
+                {membership.isVaultActive
+                  ? 'Move-in records · document & protect'
+                  : '🔒 Members only · 27-month access'}
+              </Text>
+            </View>
+            <Text style={[s.chevron, { color: c.text4 }]}>›</Text>
+          </Pressable>
+        </View>
+
+        {/* ── Action cards (2-col grid) ─────────────────────────────────────── */}
+        <View style={[s.px, s.grid, { marginTop: Spacing.sm }]}>
+          {/* Post a Vacancy */}
+          <Pressable
+            style={[s.gridCard, { backgroundColor: c.bgSubtle, borderColor: c.border }]}
+            onPress={() => router.push('/vacancy/create')}
+          >
+            <View style={[s.gridIcon, { backgroundColor: ACCENT_BG, borderColor: 'rgba(37,99,235,0.25)', borderWidth: 1 }]}>
+              <Text style={{ fontSize: 19 }}>🏗️</Text>
+            </View>
+            <Text style={[s.gridTitle, { color: c.text1 }]}>Post a Vacancy</Text>
+            <Text style={[s.gridSub, { color: c.text4 }]}>
+              {canPost ? 'List your property' : '🔒 Landlord plan'}
+            </Text>
+          </Pressable>
+
+          {/* Contact Landlords */}
+          <Pressable
+            style={[s.gridCard, { backgroundColor: c.bgSubtle, borderColor: c.border }]}
             onPress={() => router.push('/(tabs)/vacancies')}
           >
-            <Text style={[Typography.caption, { color: c.accent }]}>View all listings →</Text>
+            <View style={[s.gridIcon, { backgroundColor: GREEN_BG, borderColor: 'rgba(16,185,129,0.25)', borderWidth: 1 }]}>
+              <Text style={{ fontSize: 19 }}>📞</Text>
+            </View>
+            <Text style={[s.gridTitle, { color: c.text1 }]}>Contact Landlords</Text>
+            <Text style={[s.gridSub, { color: c.text4 }]}>
+              {hasTenantPlan ? 'View contacts' : '🔒 Tenant plan'}
+            </Text>
           </Pressable>
-        )}
-
-        {/* Membership status */}
-        <View style={[dashStyles.memberCard, { backgroundColor: c.bgSurface, borderColor: c.border, marginTop: Spacing.lg }]}>
-          <Text style={[Typography.subtitle, { color: c.text1, marginBottom: Spacing.xs }]}>Membership</Text>
-          <Text style={[Typography.caption, { color: canPostAsLandlord ? '#22c55e' : c.text3 }]}>
-            {canPostAsLandlord ? '✓ Active — can post vacancies' : 'No active plan — contribute rent data to unlock'}
-          </Text>
         </View>
+
+        {/* ── City selection ────────────────────────────────────────────────── */}
+        <View style={[s.px, { marginTop: Spacing.lg }]}>
+          <Text style={[s.sectionLabel, { color: c.text4 }]}>CHOOSE A CITY</Text>
+          <View style={s.cityGrid}>
+            {CITIES.map((city) => {
+              const vacCount = cityVacancyCounts[city.name] ?? 0
+              return (
+                <Pressable
+                  key={city.name}
+                  style={[
+                    s.cityCard,
+                    {
+                      backgroundColor: c.bgSubtle,
+                      borderColor: c.border,
+                      borderTopColor: city.accentColor,
+                      borderTopWidth: 3,
+                    },
+                  ]}
+                  onPress={() => handleCityPress(city.name)}
+                  disabled={!city.active}
+                >
+                  {/* Abbr chip */}
+                  <View style={[s.abbrChip, { backgroundColor: city.accentBg }]}>
+                    <Text style={[s.abbrText, { color: city.accentColor }]}>{city.abbr}</Text>
+                  </View>
+
+                  <Text style={[s.cityName, { color: c.text1 }]}>{city.label}</Text>
+                  <Text style={[s.cityTagline, { color: c.text4 }]}>{city.tagline}</Text>
+
+                  {/* Live indicator */}
+                  <View style={s.cityStatus}>
+                    {statsLoading ? (
+                      <ActivityIndicator size="small" color={c.text4} style={{ transform: [{ scale: 0.6 }] }} />
+                    ) : (
+                      <View style={s.liveRow}>
+                        <View style={[s.liveDot, { backgroundColor: GREEN_COLOR }]} />
+                        <Text style={[s.liveText, { color: GREEN_COLOR }]}>
+                          {vacCount > 0 ? `${vacCount} listings` : 'Live'}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </Pressable>
+              )
+            })}
+          </View>
+        </View>
+
+        {/* ── Footer ───────────────────────────────────────────────────────── */}
+        <Text style={[s.footer, { color: c.text4 }]}>
+          Community-powered · your data is private
+        </Text>
+
+        <View style={{ height: 48 }} />
       </ScrollView>
     </SafeAreaView>
   )
 }
 
-const dashStyles = StyleSheet.create({
-  postBtn: {
-    borderRadius: Radius.lg,
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-    marginBottom: Spacing.lg,
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  safe: { flex: 1 },
+  scroll: {},
+
+  // Horizontal padding wrapper
+  px: { paddingHorizontal: Spacing.base },
+
+  // ── Hero ──────────────────────────────────────────────────────────────────
+  hero: {
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.lg,
   },
-  statsGrid: {
+  heroRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm + 2,
+  },
+  logoBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoGlyph: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  wordmark: {
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  headline: {
+    fontSize: 28,
+    fontWeight: '800',
+    lineHeight: 34,
+    letterSpacing: -0.5,
+    marginBottom: Spacing.md,
+  },
+  dataBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    borderRadius: Radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  dataBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // ── Row cards (dashboard / vault) ─────────────────────────────────────────
+  rowCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  rowIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+  rowSub: {
+    fontSize: 10,
+    fontWeight: '500',
+    lineHeight: 14,
+    marginTop: 1,
+  },
+  chevron: {
+    fontSize: 18,
+    fontWeight: '400',
+  },
+
+  // ── Action grid (2-col) ───────────────────────────────────────────────────
+  grid: {
     flexDirection: 'row',
     gap: Spacing.sm,
-    flexWrap: 'wrap',
   },
-  statCard: {
+  gridCard: {
     flex: 1,
-    minWidth: '44%',
     borderRadius: Radius.md,
     borderWidth: 1,
     padding: Spacing.md,
-    alignItems: 'center',
-    gap: 2,
+    gap: Spacing.xs,
   },
-  emptyCard: {
+  gridIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  gridTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  gridSub: {
+    fontSize: 10,
+    fontWeight: '500',
+    lineHeight: 14,
+    marginTop: 1,
+  },
+
+  // ── City grid ─────────────────────────────────────────────────────────────
+  sectionLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: Spacing.sm,
+  },
+  cityGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  cityCard: {
+    width: '48%',
     borderRadius: Radius.md,
     borderWidth: 1,
-    padding: Spacing.xl ?? Spacing.lg,
-    alignItems: 'center',
+    padding: Spacing.md,
+    paddingBottom: 10,
   },
-  listingRow: {
+  abbrChip: {
+    alignSelf: 'flex-start',
+    borderRadius: 5,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginBottom: Spacing.sm,
+  },
+  abbrText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  cityName: {
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+  cityTagline: {
+    fontSize: 10,
+    fontWeight: '400',
+    lineHeight: 14,
+    marginTop: 1,
+  },
+  cityStatus: {
+    marginTop: 8,
+  },
+  liveRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.sm,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    padding: Spacing.md,
-    marginBottom: Spacing.xs,
+    gap: 4,
   },
-  statusBadge: {
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
-  viewAllBtn: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    paddingVertical: Spacing.sm,
-    alignItems: 'center',
-    marginTop: Spacing.sm,
+  liveText: {
+    fontSize: 10,
+    fontWeight: '600',
   },
-  memberCard: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    padding: Spacing.md,
-  },
-})
 
-// ─── Home Screen entry point ──────────────────────────────────────────────────
-
-export default function HomeScreen() {
-  return <MapScreen />
-}
-
-function MapScreen() {
-  const c = useColors()
-  const insets = useSafeAreaInsets()
-  const { user, profile } = useAuth()
-  const mapRef = useRef<MapView>(null)
-
-  const cityName = (profile?.city ?? 'bengaluru').toLowerCase()
-  const bounds = CITY_BOUNDS[cityName]
-
-  const initialRegion: Region = bounds ? {
-    latitude: (bounds.latMin + bounds.latMax) / 2,
-    longitude: (bounds.lngMin + bounds.lngMax) / 2,
-    latitudeDelta: bounds.latMax - bounds.latMin,
-    longitudeDelta: bounds.lngMax - bounds.lngMin,
-  } : {
-    latitude: 12.97, longitude: 77.59, latitudeDelta: 0.15, longitudeDelta: 0.15,
-  }
-
-  // Map state
-  const [region, setRegion] = useState<Region>(initialRegion)
-  const zoom = useMemo(
-    () => Math.log2(360 / (region.longitudeDelta || 0.01)),
-    [region.longitudeDelta]
-  )
-
-  // Layer state + switching queue
-  const [activeLayer, setActiveLayer] = useState<ActiveLayer>('none')
-  const [isSwitching, setIsSwitching] = useState(false)
-  const pendingLayer = useRef<ActiveLayer | null>(null)
-  const [rentMin, setRentMin] = useState(5000)
-  const [rentMax, setRentMax] = useState(100000)
-
-  // Filter state
-  const [bhkFilter, setBhkFilter] = useState<BhkFilter>('All')
-  const [rentFilter, setRentFilter] = useState<RentFilter>('All')
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('All')
-  const [furnishingFilter, setFurnishingFilter] = useState<FurnishingFilter>('All')
-  const [filtersVisible, setFiltersVisible] = useState(false)
-
-  // Vacancy detail
-  const [selectedVacancy, setSelectedVacancy] = useState<Vacancy | null>(null)
-  const [detailVisible, setDetailVisible] = useState(false)
-
-  // Data hooks
-  const { filteredVacancies, favoriteIds, toggleFavorite } = useVacancies({
-    cityName,
-    bounds,
-    bhkFilter,
-    rentFilter,
-    sourceFilter,
-    furnishingFilter,
-    userId: user?.id,
-  })
-
-  const { localities, localityStats, streetGridStats } = useRentData(cityName, bounds)
-
-  // Rent features
-  const cityHull = useMemo(() => getCityClipPolygon(cityName, localities), [cityName, localities])
-
-  const STREET_MIN_ZOOM = 14
-
-  // Auto-zoom to 14 when street layer activated below minimum zoom
-  useEffect(() => {
-    if (activeLayer !== 'rent-street') return
-    if (zoom >= STREET_MIN_ZOOM) return
-    const delta = 360 / Math.pow(2, STREET_MIN_ZOOM)
-    mapRef.current?.animateToRegion({
-      latitude: region.latitude,
-      longitude: region.longitude,
-      latitudeDelta: delta * 1.5,
-      longitudeDelta: delta,
-    }, 500)
-  }, [activeLayer])
-
-  // Debounced viewport region — recomputes street grid 300ms after panning/zooming stops
-  const [viewportRegion, setViewportRegion] = useState<Region>(initialRegion)
-  useEffect(() => {
-    const t = setTimeout(() => setViewportRegion(region), 300)
-    return () => clearTimeout(t)
-  }, [region])
-
-  // Locality features — loaded once from DB, static. Always computed regardless of layer
-  // so LocalityPolygons stays mounted with stable features (just toggles visibility via activeLayer prop).
-  const localityFeatures = useMemo(() => {
-    return buildLocalityRentFromStats(localities, localityStats, cityHull)
-  }, [localities, localityStats, cityHull])
-
-  // Street grid features — viewport-filtered, pool-based rendering.
-  const rentFeatures = useMemo(() => {
-    if (activeLayer !== 'rent-street') return []
-    if (!cityHull || !bounds) return []
-    const vpZoom = Math.log2(360 / (viewportRegion.longitudeDelta || 0.01))
-    if (vpZoom < STREET_MIN_ZOOM) return []
-    // 1.5× buffer so cells stay visible beyond viewport edges while panning (no blink).
-    const latHalf = (viewportRegion.latitudeDelta / 2) * 1.5
-    const lngHalf = (viewportRegion.longitudeDelta / 2) * 1.5
-    const vLatMin = viewportRegion.latitude - latHalf
-    const vLatMax = viewportRegion.latitude + latHalf
-    const vLngMin = viewportRegion.longitude - lngHalf
-    const vLngMax = viewportRegion.longitude + lngHalf
-    const viewportStats = streetGridStats.filter(s => {
-      const cellLat = bounds.latMin + s.grid_lat * GRID_STEP_250
-      const cellLng = bounds.lngMin + s.grid_lng * GRID_STEP_250
-      return cellLat >= vLatMin && cellLat <= vLatMax
-          && cellLng >= vLngMin && cellLng <= vLngMax
-    })
-    return buildStreetGridFromStats(cityName, viewportStats, cityHull)
-  }, [activeLayer, viewportRegion, streetGridStats, cityName, cityHull, bounds])
-
-
-  // Cluster map — controls which markers are visible and their count label.
-  // Only opacity/label changes; coordinates never change = no Google Maps animation.
-  // Debounced 400ms so clustering only changes when zoom settles (no quantisation —
-  // rounding caused gaps where old clusterMap hid markers before new one arrived).
-  const [clusterZoom, setClusterZoom] = useState(zoom)
-  useEffect(() => {
-    const t = setTimeout(() => setClusterZoom(zoom), 400)
-    return () => clearTimeout(t)
-  }, [zoom])
-
-  const { clusterMap, clusterMembers, atFinestZoom } = useMemo(
-    () => buildClusterMap(filteredVacancies, clusterZoom),
-    [filteredVacancies, clusterZoom],
-  )
-
-  // Pool-based rendering: no mount/unmount on layer switch or viewport pan.
-  // isSwitching just drives the spinner and queued layer processing.
-  const prevLayerRef = useRef<ActiveLayer>('none')
-  useEffect(() => {
-    const layerChanged = prevLayerRef.current !== activeLayer
-    prevLayerRef.current = activeLayer
-    if (!layerChanged) return
-
-    setIsSwitching(true)
-    const t = setTimeout(() => {
-      if (pendingLayer.current !== null) {
-        const next = pendingLayer.current
-        pendingLayer.current = null
-        setActiveLayer(next)
-      } else {
-        setIsSwitching(false)
-      }
-    }, 150)
-    return () => clearTimeout(t)
-  }, [activeLayer])
-
-  // Coordinates are stable — only depend on cityHull/bounds, NOT zoom.
-  // Zoom gate is handled in JSX so coordinates don't recompute on every pan.
-  const streetGreyRingCoords = useMemo(() => {
-    if (cityHull && cityHull.length >= 3) {
-      return cityHull.map(([lng, lat]) => ({ latitude: lat, longitude: lng }))
-    }
-    if (bounds) {
-      return [
-        { latitude: bounds.latMin, longitude: bounds.lngMin },
-        { latitude: bounds.latMin, longitude: bounds.lngMax },
-        { latitude: bounds.latMax, longitude: bounds.lngMax },
-        { latitude: bounds.latMax, longitude: bounds.lngMin },
-      ]
-    }
-    return null
-  }, [cityHull, bounds])
-  const showStreetRing = activeLayer === 'rent-street' && zoom >= STREET_MIN_ZOOM
-
-
-  // Queued layer change — if switching in progress, queue the latest request
-  const handleLayerChange = useCallback((layer: ActiveLayer) => {
-    if (isSwitching) {
-      pendingLayer.current = layer
-      return
-    }
-    setActiveLayer(layer)
-  }, [isSwitching])
-
-  // Handlers
-  const handleVacancyPress = useCallback((v: Vacancy) => {
-    router.push(`/vacancy/${v.id}`)
-  }, [])
-
-  const handleClusterPress = useCallback((
-    coord: { latitude: number; longitude: number },
-    members: Vacancy[],
-  ) => {
-    // At finest zoom (>= 16) the grid can't split co-located vacancies any further.
-    // Show a picker so the user can choose which vacancy to open.
-    if (atFinestZoom || !region || region.latitudeDelta < 0.001) {
-      if (members.length === 1) {
-        router.push(`/vacancy/${members[0].id}`)
-      } else {
-        Alert.alert(
-          `${members.length} Vacancies`,
-          'Select a vacancy to view',
-          [
-            ...members.map(v => ({
-              text: `${v.bhk_type} · ₹${formatRent(v.asking_rent)}`,
-              onPress: () => router.push(`/vacancy/${v.id}`),
-            })),
-            { text: 'Cancel', style: 'cancel' as const },
-          ],
-        )
-      }
-      return
-    }
-    mapRef.current?.animateToRegion({
-      latitude: coord.latitude,
-      longitude: coord.longitude,
-      latitudeDelta: region.latitudeDelta / 2.5,
-      longitudeDelta: region.longitudeDelta / 2.5,
-    }, 350)
-  }, [atFinestZoom, region])
-
-  const handleSearchResult = useCallback((lat: number, lng: number) => {
-    mapRef.current?.animateToRegion({
-      latitude: lat,
-      longitude: lng,
-      latitudeDelta: 0.02,
-      longitudeDelta: 0.02,
-    }, 500)
-  }, [])
-
-  const handleLocate = useCallback((lat: number, lng: number) => {
-    mapRef.current?.animateToRegion({
-      latitude: lat,
-      longitude: lng,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    }, 500)
-  }, [])
-
-  const clearFilters = useCallback(() => {
-    setBhkFilter('All')
-    setRentFilter('All')
-    setSourceFilter('All')
-    setFurnishingFilter('All')
-  }, [])
-
-  const hasActiveFilters = bhkFilter !== 'All' || rentFilter !== 'All' || sourceFilter !== 'All' || furnishingFilter !== 'All'
-  const showRentLayer = activeLayer === 'rent-locality' || activeLayer === 'rent-street'
-
-  return (
-    <GestureHandlerRootView style={styles.flex}>
-      <View style={styles.flex}>
-        <MapView
-          ref={mapRef}
-          style={styles.flex}
-          provider={PROVIDER_GOOGLE}
-          initialRegion={initialRegion}
-          onRegionChangeComplete={setRegion}
-          showsUserLocation
-          showsMyLocationButton={false}
-          showsCompass={false}
-          maxZoomLevel={activeLayer === 'rent-street' ? 17 : 20}
-          customMapStyle={DARK_MAP_STYLE}
-        >
-          {/* Layer 1: City hull background — single always-mounted polygon (never add/remove).
-               Locality: subtle grey so Voronoi gaps show grey not transparent.
-               Street: stronger grey for empty grid areas.
-               None / switching: transparent. */}
-          {streetGreyRingCoords && (
-            <Polygon
-              coordinates={streetGreyRingCoords}
-              fillColor={
-                showStreetRing ? 'rgba(148, 163, 184, 0.35)'
-                : activeLayer === 'rent-locality' ? 'rgba(148, 163, 184, 0.18)'
-                : 'rgba(0,0,0,0)'
-              }
-              strokeColor={showStreetRing ? 'rgba(148, 163, 184, 0.4)' : 'rgba(0,0,0,0)'}
-              strokeWidth={1}
-            />
-          )}
-
-          {/* Layer 2a: Locality polygons — static, always mounted, <200 polygons from DB.
-               Visibility toggled via activeLayer prop (color → transparent when inactive). */}
-          <LocalityPolygons
-            features={localityFeatures}
-            activeLayer={activeLayer}
-            rentMin={rentMin}
-            rentMax={rentMax}
-          />
-
-          {/* Layer 2b: Street grid — pool-based (120 slots), viewport-filtered. */}
-          <RentPolygons
-            features={rentFeatures}
-            rentMin={rentMin}
-            rentMax={rentMax}
-          />
-
-          {/* Layer 2c: Street grid labels — rent value at each cell centroid. */}
-          <RentGridLabels
-            features={rentFeatures}
-            visible={activeLayer === 'rent-street'}
-            showAllBhk={zoom >= 16}
-          />
-
-          {/* Layer 3: Outside city dim — always mounted, transparent when not on rent layer. */}
-          <CityMask cityHull={cityHull} bounds={bounds} visible={showRentLayer} />
-
-          {/* Vacancy markers — pool of 200 slots, viewport-filtered + zoom-clustered.
-               Pool never mounts/unmounts; slots update props in-place. */}
-          <VacancyMarkerPool
-            vacancies={filteredVacancies}
-            clusterMap={clusterMap}
-            clusterMembers={clusterMembers}
-            atFinestZoom={atFinestZoom}
-            hidden={showRentLayer}
-            onVacancyPress={handleVacancyPress}
-            onClusterPress={handleClusterPress}
-          />
-        </MapView>
-
-        {/* Layer switching spinner */}
-        {isSwitching && (
-          <View style={styles.switchingOverlay} pointerEvents="none">
-            <ActivityIndicator size="small" color="#2563eb" />
-          </View>
-        )}
-
-        {/* Floating UI */}
-        <View style={[styles.topOverlay, { top: insets.top + Spacing.sm }]}>
-          <MapSearchBar cityBounds={bounds ?? null} onSelectResult={handleSearchResult} />
-        </View>
-
-        {/* Layer toggle + slider */}
-        <View style={[styles.layerOverlay, { bottom: insets.bottom + 100 }]}>
-          <LayerToggleBar
-            activeLayer={activeLayer}
-            onChangeLayer={handleLayerChange}
-            hasContributed={profile?.has_contributed ?? false}
-            disabled={isSwitching}
-          />
-          {showRentLayer && (
-            <RentSlider
-              rentMin={rentMin}
-              rentMax={rentMax}
-              onChangeMin={setRentMin}
-              onChangeMax={setRentMax}
-            />
-          )}
-        </View>
-
-        {/* Bottom-right: zoom, locate + filter buttons */}
-        <View style={[styles.bottomRight, { bottom: insets.bottom + 100 }]}>
-          <Pressable
-            style={[styles.zoomBtn, { backgroundColor: c.bgSurface, borderColor: c.border }]}
-            onPress={() => {
-              if (!region || !mapRef.current) return
-              mapRef.current.animateToRegion({
-                ...region,
-                latitudeDelta: region.latitudeDelta / 2,
-                longitudeDelta: region.longitudeDelta / 2,
-              }, 300)
-            }}
-          >
-            <Text style={[styles.zoomText, { color: c.text1 }]}>＋</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.zoomBtn, { backgroundColor: c.bgSurface, borderColor: c.border }]}
-            onPress={() => {
-              if (!region || !mapRef.current) return
-              mapRef.current.animateToRegion({
-                ...region,
-                latitudeDelta: region.latitudeDelta * 2,
-                longitudeDelta: region.longitudeDelta * 2,
-              }, 300)
-            }}
-          >
-            <Text style={[styles.zoomText, { color: c.text1 }]}>ー</Text>
-          </Pressable>
-          <LocateButton onLocate={handleLocate} />
-          <Pressable
-            style={[styles.filterBtn, { backgroundColor: c.bgSurface, borderColor: c.border }]}
-            onPress={() => setFiltersVisible(true)}
-          >
-            <Text style={styles.filterIcon}>⚙️</Text>
-            {hasActiveFilters && <View style={[styles.filterBadge, { backgroundColor: c.accent }]} />}
-          </Pressable>
-        </View>
-
-        {/* Zoom level indicator — bottom left */}
-        <View style={[styles.zoomBadge, { backgroundColor: c.bgSurface, borderColor: c.border, bottom: insets.bottom + 60 }]}>
-          <Text style={[Typography.caption, { color: c.text3, fontVariant: ['tabular-nums'] }]}>
-            z{zoom.toFixed(1)}
-          </Text>
-        </View>
-
-        {/* Count badge */}
-        <View style={[styles.countBadge, { backgroundColor: c.bgSurface, borderColor: c.border, bottom: insets.bottom + 60 }]}>
-          <Text style={[Typography.caption, { color: c.text2 }]}>
-            {filteredVacancies.length} listings
-          </Text>
-        </View>
-
-        {/* Bottom sheets */}
-        <VacancyDetailSheet
-          vacancy={selectedVacancy}
-          visible={detailVisible}
-          onClose={() => setDetailVisible(false)}
-          isFavorite={selectedVacancy ? favoriteIds.has(selectedVacancy.id) : false}
-          onToggleFavorite={toggleFavorite}
-        />
-
-        <FiltersSheet
-          visible={filtersVisible}
-          onClose={() => setFiltersVisible(false)}
-          bhkFilter={bhkFilter}
-          rentFilter={rentFilter}
-          sourceFilter={sourceFilter}
-          furnishingFilter={furnishingFilter}
-          onBhk={setBhkFilter}
-          onRent={setRentFilter}
-          onSource={setSourceFilter}
-          onFurnishing={setFurnishingFilter}
-          onClearAll={clearFilters}
-        />
-      </View>
-    </GestureHandlerRootView>
-  )
-}
-
-const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  topOverlay: {
-    position: 'absolute',
-    left: Spacing.base,
-    right: Spacing.base,
-    zIndex: 10,
-  },
-  layerOverlay: {
-    position: 'absolute',
-    left: Spacing.base,
-    right: 70,
-    gap: Spacing.sm,
-  },
-  bottomRight: {
-    position: 'absolute',
-    right: Spacing.base,
-    gap: Spacing.sm,
-    alignItems: 'center',
-  },
-  filterBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-  },
-  zoomBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-  },
-  zoomText: { fontSize: 22, fontWeight: '700' },
-  filterIcon: { fontSize: 20 },
-  filterBadge: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  switchingOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  zoomBadge: {
-    position: 'absolute',
-    left: Spacing.base,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  countBadge: {
-    position: 'absolute',
-    alignSelf: 'center',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: 20,
-    borderWidth: 1,
+  // ── Footer ────────────────────────────────────────────────────────────────
+  footer: {
+    textAlign: 'center',
+    fontSize: 10,
+    letterSpacing: 0.3,
+    marginTop: Spacing.xl,
+    marginBottom: Spacing.sm,
   },
 })
