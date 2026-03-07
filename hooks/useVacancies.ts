@@ -61,7 +61,7 @@ export function useVacancies({ cityName, bounds, bhkFilter, rentFilter, sourceFi
   const refresh = useCallback(() => setRefreshKey(k => k + 1), [])
 
   useEffect(() => {
-    if (!bounds) { setVacancies([]); return }
+    if (!bounds || bounds.latMin == null || bounds.latMax == null || bounds.lngMin == null || bounds.lngMax == null) { setVacancies([]); return }
     let cancelled = false
     const cacheKey = `vacancies_v2:${cityName}`
     const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
@@ -80,11 +80,10 @@ export function useVacancies({ cityName, bounds, bhkFilter, rentFilter, sourceFi
         .from('vacancies')
         .select('id, lat, lng, city, bhk_type, asking_rent, deposit, available_from, contact_phone, notes, society_id, society_name, created_at, expires_at, user_id, source, status, photos, furnishing, property_type, area_sqft, parking_bike, parking_car, landmark, preference, description, locality_name, sublocality_name')
         .eq('is_active', true)
+        .eq('city', cityName)
         .gt('expires_at', now)
-        .gte('lat', bounds.latMin)
-        .lte('lat', bounds.latMax)
-        .gte('lng', bounds.lngMin)
-        .lte('lng', bounds.lngMax)
+        .not('lat', 'is', null)
+        .not('lng', 'is', null)
       if (cancelled) return
       if (error) { console.error('[vacancies]', error.message); return }
       if (data) {

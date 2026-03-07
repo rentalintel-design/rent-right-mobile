@@ -43,10 +43,7 @@ export default function VacanciesScreen() {
   const [refreshing, setRefreshing] = useState(false)
 
   const cityName = (profile?.city ?? 'bengaluru').toLowerCase()
-  const cityBounds = CITY_BOUNDS[cityName as keyof typeof CITY_BOUNDS]
-  const bounds = cityBounds
-    ? { latMin: cityBounds.south, latMax: cityBounds.north, lngMin: cityBounds.west, lngMax: cityBounds.east }
-    : undefined
+  const bounds = CITY_BOUNDS[cityName as keyof typeof CITY_BOUNDS]
 
   const { filteredVacancies, favoriteIds, toggleFavorite, refresh } = useVacancies({
     cityName,
@@ -154,7 +151,7 @@ export default function VacanciesScreen() {
           <Text style={[Typography.title, { color: c.text1 }]}>Vacancies</Text>
           {tab === 'browse' && (
             <Text style={[Typography.caption, { color: c.text3 }]}>
-              {cityName} · {filteredVacancies.length} listing{filteredVacancies.length !== 1 ? 's' : ''}
+              {cityName.charAt(0).toUpperCase() + cityName.slice(1)} · {filteredVacancies.length} listing{filteredVacancies.length !== 1 ? 's' : ''}
             </Text>
           )}
         </View>

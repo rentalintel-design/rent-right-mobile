@@ -21,7 +21,8 @@ import { Spacing, Typography, Radius } from '@/constants/theme'
 import { supabase } from '@/lib/supabase'
 import { formatRent } from '@/lib/vacancyUtils'
 
-import { VacancyMarker } from '@/components/map/VacancyMarker'
+import { VacancyMarkerPool } from '@/components/map/VacancyMarkerPool'
+import { buildClusterMap } from '@/lib/clusterVacancies'
 import VacancyDetailSheet from '@/components/map/VacancyDetailSheet'
 import { RentPolygons } from '@/components/map/RentPolygons'
 import { LocalityPolygons } from '@/components/map/LocalityPolygons'
@@ -241,8 +242,6 @@ const dashStyles = StyleSheet.create({
 // ─── Home Screen entry point ──────────────────────────────────────────────────
 
 export default function HomeScreen() {
-  const { profile } = useAuth()
-  if (profile?.role === 'landlord') return <LandlordDashboard />
   return <MapScreen />
 }
 
@@ -355,6 +354,22 @@ function MapScreen() {
     return buildStreetGridFromStats(cityName, viewportStats, cityHull)
   }, [activeLayer, viewportRegion, streetGridStats, cityName, cityHull, bounds])
 
+
+  // Cluster map — controls which markers are visible and their count label.
+  // Only opacity/label changes; coordinates never change = no Google Maps animation.
+  // Debounced 400ms so clustering only changes when zoom settles (no quantisation —
+  // rounding caused gaps where old clusterMap hid markers before new one arrived).
+  const [clusterZoom, setClusterZoom] = useState(zoom)
+  useEffect(() => {
+    const t = setTimeout(() => setClusterZoom(zoom), 400)
+    return () => clearTimeout(t)
+  }, [zoom])
+
+  const clusterMap = useMemo(
+    () => buildClusterMap(filteredVacancies, clusterZoom),
+    [filteredVacancies, clusterZoom],
+  )
+
   // Pool-based rendering: no mount/unmount on layer switch or viewport pan.
   // isSwitching just drives the spinner and queued layer processing.
   const prevLayerRef = useRef<ActiveLayer>('none')
@@ -408,6 +423,16 @@ function MapScreen() {
   const handleVacancyPress = useCallback((v: Vacancy) => {
     router.push(`/vacancy/${v.id}`)
   }, [])
+
+  const handleClusterPress = useCallback((coord: { latitude: number; longitude: number }) => {
+    if (!mapRef.current || !region) return
+    mapRef.current.animateToRegion({
+      latitude: coord.latitude,
+      longitude: coord.longitude,
+      latitudeDelta: region.latitudeDelta / 2.5,
+      longitudeDelta: region.longitudeDelta / 2.5,
+    }, 350)
+  }, [region])
 
   const handleSearchResult = useCallback((lat: number, lng: number) => {
     mapRef.current?.animateToRegion({
@@ -487,11 +512,15 @@ function MapScreen() {
           {/* Layer 3: Outside city dim — always mounted, transparent when not on rent layer. */}
           <CityMask cityHull={cityHull} bounds={bounds} visible={showRentLayer} />
 
-          {/* Vacancy markers — always mounted (never add/remove native views).
-               Hidden by moving to null island + opacity 0 when rent layer is active. */}
-          {filteredVacancies.map(v => (
-            <VacancyMarker key={v.id} vacancy={v} onPress={handleVacancyPress} hidden={showRentLayer} />
-          ))}
+          {/* Vacancy markers — pool of 200 slots, viewport-filtered + zoom-clustered.
+               Pool never mounts/unmounts; slots update props in-place. */}
+          <VacancyMarkerPool
+            vacancies={filteredVacancies}
+            clusterMap={clusterMap}
+            hidden={showRentLayer}
+            onVacancyPress={handleVacancyPress}
+            onClusterPress={handleClusterPress}
+          />
         </MapView>
 
         {/* Layer switching spinner */}

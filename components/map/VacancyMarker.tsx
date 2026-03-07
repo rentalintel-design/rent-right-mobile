@@ -30,14 +30,20 @@ export const VacancyMarker = memo(function VacancyMarker({ vacancy, onPress, hid
   )
 })
 
-export function ClusterMarker({ count, coordinate, onPress }: {
+export function ClusterMarker({ count, coordinate, onPress, hidden }: {
   count: number
   coordinate: { latitude: number; longitude: number }
   onPress: () => void
+  hidden?: boolean
 }) {
   const size = Math.min(48, 28 + Math.log2(count) * 4)
   return (
-    <Marker coordinate={coordinate} onPress={onPress} tracksViewChanges={false}>
+    <Marker
+      coordinate={hidden ? NULL_COORD : coordinate}
+      onPress={hidden ? undefined : onPress}
+      tracksViewChanges={false}
+      opacity={hidden ? 0 : 1}
+    >
       <View style={[styles.cluster, { width: size, height: size, borderRadius: size / 2 }]}>
         <Text style={styles.clusterText}>{count}</Text>
       </View>
