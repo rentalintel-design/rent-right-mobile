@@ -16,14 +16,16 @@ type Slot = { vacancy: Vacancy } | null
 
 type Props = {
   vacancies: Vacancy[]
-  clusterMap: ClusterMap   // which vacancy IDs are visible, and their cluster count
-  hidden: boolean          // true when rent layer is active — hide all markers
+  clusterMap: ClusterMap                     // which vacancy IDs are visible, and their count
+  clusterMembers: Map<string, Vacancy[]>     // representative ID → all vacancies in cluster
+  atFinestZoom: boolean                      // true when zoom >= 16, no finer grid exists
+  hidden: boolean                            // true when rent layer is active — hide all markers
   onVacancyPress: (vacancy: Vacancy) => void
-  onClusterPress: (coord: { latitude: number; longitude: number }) => void
+  onClusterPress: (coord: { latitude: number; longitude: number }, members: Vacancy[]) => void
 }
 
 export const VacancyMarkerPool = memo(function VacancyMarkerPool({
-  vacancies, clusterMap, hidden, onVacancyPress, onClusterPress,
+  vacancies, clusterMap, clusterMembers, atFinestZoom, hidden, onVacancyPress, onClusterPress,
 }: Props) {
   const idToSlot = useRef<Map<string, number>>(new Map())
   const occupiedSlots = useRef<Set<number>>(new Set())
@@ -91,7 +93,10 @@ export const VacancyMarkerPool = memo(function VacancyMarkerPool({
             onPress={
               isVisible && slot
                 ? count > 1
-                  ? () => onClusterPress({ latitude: slot.vacancy.lat, longitude: slot.vacancy.lng })
+                  ? () => onClusterPress(
+                      { latitude: slot.vacancy.lat, longitude: slot.vacancy.lng },
+                      clusterMembers.get(slot.vacancy.id) ?? [slot.vacancy],
+                    )
                   : () => onVacancyPress(slot.vacancy)
                 : undefined
             }

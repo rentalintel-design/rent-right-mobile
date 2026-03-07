@@ -17,9 +17,18 @@ function gridStep(zoom: number): number {
   return 0.064                   // ~7 km   (2×)
 }
 
-// Returns a ClusterMap: which vacancy IDs are visible (as representatives) and their cluster count.
-// Vacancies not in the map should be hidden. Coordinates never change — only visibility.
-export function buildClusterMap(vacancies: Vacancy[], zoom: number): ClusterMap {
+// clusterMap: representative vacancy ID → count
+// clusterMembers: representative vacancy ID → all vacancies in that cell
+export type ClusterResult = {
+  clusterMap: ClusterMap
+  clusterMembers: Map<string, Vacancy[]>
+  atFinestZoom: boolean   // true when zoom >= 16 — no finer grid exists
+}
+
+// Returns ClusterResult: which vacancy IDs are visible (as representatives),
+// their cluster count, and the full member list for each cluster.
+// Vacancies not in clusterMap should be hidden. Coordinates never change.
+export function buildClusterMap(vacancies: Vacancy[], zoom: number): ClusterResult {
   const step = gridStep(zoom)
   const cells = new Map<string, Vacancy[]>()
 
@@ -31,10 +40,12 @@ export function buildClusterMap(vacancies: Vacancy[], zoom: number): ClusterMap 
     cells.get(key)!.push(v)
   }
 
-  const result: ClusterMap = new Map()
+  const clusterMap: ClusterMap = new Map()
+  const clusterMembers: Map<string, Vacancy[]> = new Map()
   for (const group of cells.values()) {
     // Pick the first vacancy in the cell as representative
-    result.set(group[0].id, group.length)
+    clusterMap.set(group[0].id, group.length)
+    clusterMembers.set(group[0].id, group)
   }
-  return result
+  return { clusterMap, clusterMembers, atFinestZoom: zoom >= 16 }
 }

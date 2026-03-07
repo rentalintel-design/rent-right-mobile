@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator } from 'react-native'
+import { View, StyleSheet, Pressable, Text, ScrollView, ActivityIndicator, Alert } from 'react-native'
 import MapView, { Region, PROVIDER_GOOGLE, Polygon } from 'react-native-maps'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -365,7 +365,7 @@ function MapScreen() {
     return () => clearTimeout(t)
   }, [zoom])
 
-  const clusterMap = useMemo(
+  const { clusterMap, clusterMembers, atFinestZoom } = useMemo(
     () => buildClusterMap(filteredVacancies, clusterZoom),
     [filteredVacancies, clusterZoom],
   )
@@ -424,15 +424,37 @@ function MapScreen() {
     router.push(`/vacancy/${v.id}`)
   }, [])
 
-  const handleClusterPress = useCallback((coord: { latitude: number; longitude: number }) => {
-    if (!mapRef.current || !region) return
-    mapRef.current.animateToRegion({
+  const handleClusterPress = useCallback((
+    coord: { latitude: number; longitude: number },
+    members: Vacancy[],
+  ) => {
+    // At finest zoom (>= 16) the grid can't split co-located vacancies any further.
+    // Show a picker so the user can choose which vacancy to open.
+    if (atFinestZoom || !region || region.latitudeDelta < 0.001) {
+      if (members.length === 1) {
+        router.push(`/vacancy/${members[0].id}`)
+      } else {
+        Alert.alert(
+          `${members.length} Vacancies`,
+          'Select a vacancy to view',
+          [
+            ...members.map(v => ({
+              text: `${v.bhk_type} · ₹${formatRent(v.asking_rent)}`,
+              onPress: () => router.push(`/vacancy/${v.id}`),
+            })),
+            { text: 'Cancel', style: 'cancel' as const },
+          ],
+        )
+      }
+      return
+    }
+    mapRef.current?.animateToRegion({
       latitude: coord.latitude,
       longitude: coord.longitude,
       latitudeDelta: region.latitudeDelta / 2.5,
       longitudeDelta: region.longitudeDelta / 2.5,
     }, 350)
-  }, [region])
+  }, [atFinestZoom, region])
 
   const handleSearchResult = useCallback((lat: number, lng: number) => {
     mapRef.current?.animateToRegion({
@@ -517,6 +539,8 @@ function MapScreen() {
           <VacancyMarkerPool
             vacancies={filteredVacancies}
             clusterMap={clusterMap}
+            clusterMembers={clusterMembers}
+            atFinestZoom={atFinestZoom}
             hidden={showRentLayer}
             onVacancyPress={handleVacancyPress}
             onClusterPress={handleClusterPress}
