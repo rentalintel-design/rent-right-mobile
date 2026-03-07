@@ -9,12 +9,12 @@ export type ClusterMap = Map<string, number>
 // they will ALWAYS share a cell at any coarser zoom. Only splitting ever happens
 // as you zoom in — a vacancy can never "rejoin" a cluster it already left.
 function gridStep(zoom: number): number {
-  if (zoom >= 16) return 0.001   // ~110 m
-  if (zoom >= 14) return 0.002   // ~220 m  (2×)
-  if (zoom >= 12) return 0.004   // ~440 m  (2×)
-  if (zoom >= 10) return 0.008   // ~880 m  (2×)
-  if (zoom >= 8)  return 0.016   // ~1.8 km (2×)
-  return 0.032                   // ~3.5 km (2×)
+  if (zoom >= 16) return 0.002   // ~220 m
+  if (zoom >= 14) return 0.004   // ~440 m  (2×)
+  if (zoom >= 12) return 0.008   // ~880 m  (2×)
+  if (zoom >= 10) return 0.016   // ~1.8 km (2×)
+  if (zoom >= 8)  return 0.032   // ~3.5 km (2×)
+  return 0.064                   // ~7 km   (2×)
 }
 
 // Returns a ClusterMap: which vacancy IDs are visible (as representatives) and their cluster count.
