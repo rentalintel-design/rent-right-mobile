@@ -1,74 +1,19 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   View, Text, Pressable, Modal, StyleSheet,
-  TextInput, FlatList, KeyboardAvoidingView, Platform,
+  TextInput, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
 import { useColors } from '@/hooks/use-theme-color'
 import { Typography, Spacing, Radius } from '@/constants/theme'
 
+const WEB_BASE = 'https://rent-right-seven.vercel.app'
+
 export type Biller = {
-  id: string          // BBPS biller ID e.g. "BESCOM000KAR01"
-  name: string        // Display name e.g. "BESCOM"
-  category: 'electricity' | 'water' | 'gas' | 'internet'
+  id: string
+  name: string
+  category: string
   state?: string
 }
-
-// Common Indian utility billers (BBPS directory subset)
-const BILLERS: Biller[] = [
-  // Electricity
-  { id: 'BESCOM000KAR01', name: 'BESCOM', category: 'electricity', state: 'Karnataka' },
-  { id: 'GESCOM000KAR01', name: 'GESCOM', category: 'electricity', state: 'Karnataka' },
-  { id: 'HESCOM000KAR01', name: 'HESCOM', category: 'electricity', state: 'Karnataka' },
-  { id: 'MESCOM000KAR01', name: 'MESCOM', category: 'electricity', state: 'Karnataka' },
-  { id: 'CHESCOM00KAR01', name: 'CHESCOM', category: 'electricity', state: 'Karnataka' },
-  { id: 'MSEDCL00MAHA01', name: 'MSEDCL', category: 'electricity', state: 'Maharashtra' },
-  { id: 'BEST0000MAHA01', name: 'BEST', category: 'electricity', state: 'Maharashtra' },
-  { id: 'APEPDCL0ANDH01', name: 'APEPDCL', category: 'electricity', state: 'Andhra Pradesh' },
-  { id: 'APSPDCL0ANDH01', name: 'APSPDCL', category: 'electricity', state: 'Andhra Pradesh' },
-  { id: 'TSSPDCL0TELA01', name: 'TSSPDCL', category: 'electricity', state: 'Telangana' },
-  { id: 'TSNPDCL0TELA01', name: 'TSNPDCL', category: 'electricity', state: 'Telangana' },
-  { id: 'TNEB0000TAMI01', name: 'TNEB / TANGEDCO', category: 'electricity', state: 'Tamil Nadu' },
-  { id: 'CESC0000WEST01', name: 'CESC', category: 'electricity', state: 'West Bengal' },
-  { id: 'WBSEDCL0WEST01', name: 'WBSEDCL', category: 'electricity', state: 'West Bengal' },
-  { id: 'TPDDL000DELH01', name: 'TPDDL (Tata Power Delhi)', category: 'electricity', state: 'Delhi' },
-  { id: 'BSES0000DELH01', name: 'BSES Rajdhani', category: 'electricity', state: 'Delhi' },
-  { id: 'BSESYAMU0DELH01', name: 'BSES Yamuna', category: 'electricity', state: 'Delhi' },
-  { id: 'DHBVN000HARY01', name: 'DHBVN', category: 'electricity', state: 'Haryana' },
-  { id: 'UHBVN000HARY01', name: 'UHBVN', category: 'electricity', state: 'Haryana' },
-  { id: 'PSPCL000PUNJ01', name: 'PSPCL', category: 'electricity', state: 'Punjab' },
-  { id: 'JVVNL000RAJA01', name: 'JVVNL', category: 'electricity', state: 'Rajasthan' },
-  { id: 'AVVNL000RAJA01', name: 'AVVNL', category: 'electricity', state: 'Rajasthan' },
-  { id: 'UPPCL000UTPR01', name: 'UPPCL', category: 'electricity', state: 'Uttar Pradesh' },
-  { id: 'PVVNL000UTPR01', name: 'PVVNL', category: 'electricity', state: 'Uttar Pradesh' },
-  { id: 'MVVNL000UTPR01', name: 'MVVNL', category: 'electricity', state: 'Uttar Pradesh' },
-  { id: 'KESC0000KERA01', name: 'KSEB', category: 'electricity', state: 'Kerala' },
-  { id: 'GUVNL000GUJA01', name: 'UGVCL / DGVCL / MGVCL / PGVCL', category: 'electricity', state: 'Gujarat' },
-  // Water
-  { id: 'BWSSB000KAR01', name: 'BWSSB', category: 'water', state: 'Karnataka' },
-  { id: 'HMWSSB00TELA01', name: 'HMWSSB', category: 'water', state: 'Telangana' },
-  { id: 'CMWSSB00TAMI01', name: 'Chennai Metrowater (CMWSSB)', category: 'water', state: 'Tamil Nadu' },
-  { id: 'DJB00000DELH01', name: 'Delhi Jal Board (DJB)', category: 'water', state: 'Delhi' },
-  { id: 'MCGM0000MAHA01', name: 'BMC / MCGM', category: 'water', state: 'Maharashtra' },
-  { id: 'PCMC0000MAHA01', name: 'PCMC Water', category: 'water', state: 'Maharashtra' },
-  { id: 'BWWB0000KAR01', name: 'KUWSDB / Town Panchayat', category: 'water', state: 'Karnataka' },
-  // Gas
-  { id: 'IGL00000DELH01', name: 'Indraprastha Gas (IGL)', category: 'gas', state: 'Delhi / NCR' },
-  { id: 'MGL00000MAHA01', name: 'Mahanagar Gas (MGL)', category: 'gas', state: 'Maharashtra' },
-  { id: 'GAILGAS0MULT01', name: 'GAIL Gas', category: 'gas', state: 'Multiple' },
-  { id: 'GUJARAT0GAS001', name: 'Gujarat Gas', category: 'gas', state: 'Gujarat' },
-  { id: 'ADANIGAS0MULT1', name: 'Adani Gas', category: 'gas', state: 'Multiple' },
-  { id: 'TORRENT0GAS01', name: 'Torrent Gas', category: 'gas', state: 'Gujarat / Rajasthan' },
-  { id: 'SABARMATI0GAS1', name: 'Sabarmati Gas', category: 'gas', state: 'Gujarat' },
-  // Internet / Broadband
-  { id: 'JIOFIBR0MULT01', name: 'JioFiber', category: 'internet', state: 'Pan India' },
-  { id: 'AIRTELBB0MULT1', name: 'Airtel Broadband', category: 'internet', state: 'Pan India' },
-  { id: 'BSNL0000MULT01', name: 'BSNL Broadband', category: 'internet', state: 'Pan India' },
-  { id: 'ACTFIBER0MULT1', name: 'ACT Fibernet', category: 'internet', state: 'Multiple' },
-  { id: 'HATHWAY0MULT01', name: 'Hathway Broadband', category: 'internet', state: 'Multiple' },
-  { id: 'TIKONA00MULT01', name: 'Tikona', category: 'internet', state: 'Multiple' },
-  { id: 'EXCITEL0DELH01', name: 'Excitel', category: 'internet', state: 'Delhi / NCR' },
-]
 
 const CATEGORY_ICONS: Record<string, string> = {
   electricity: '⚡',
@@ -88,21 +33,36 @@ export default function BillerPickerSheet({ visible, initialCategory, onSelect, 
   const c = useColors()
   const [query, setQuery] = useState('')
   const [activeCategory, setActiveCategory] = useState<string>(initialCategory ?? 'electricity')
+  const [billers, setBillers] = useState<Biller[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const categories = ['electricity', 'water', 'gas', 'internet'] as const
+
+  // Fetch billers from Setu (via web API) when category changes or sheet opens
+  useEffect(() => {
+    if (!visible) return
+    let cancelled = false
+    setLoading(true)
+    setBillers([])
+    fetch(`${WEB_BASE}/api/billpay/billers?category=${activeCategory}`)
+      .then(r => r.json())
+      .then((data: { billers?: Biller[] }) => {
+        if (!cancelled) setBillers(data.billers ?? [])
+      })
+      .catch(() => { if (!cancelled) setBillers([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [visible, activeCategory])
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim()
-    return BILLERS.filter(b => {
-      const matchesCat = !q && b.category === activeCategory
-      const matchesSearch = q && (
-        b.name.toLowerCase().includes(q) ||
-        b.state?.toLowerCase().includes(q) ||
-        b.id.toLowerCase().includes(q)
-      )
-      return matchesCat || matchesSearch
-    })
-  }, [query, activeCategory])
-
-  const categories = ['electricity', 'water', 'gas', 'internet'] as const
+    if (!q) return billers
+    return billers.filter(b =>
+      b.name.toLowerCase().includes(q) ||
+      b.state?.toLowerCase().includes(q) ||
+      b.id.toLowerCase().includes(q)
+    )
+  }, [query, billers])
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -138,7 +98,7 @@ export default function BillerPickerSheet({ visible, initialCategory, onSelect, 
             )}
           </View>
 
-          {/* Category tabs (shown when not searching) */}
+          {/* Category tabs */}
           {!query && (
             <View style={st.tabs}>
               {categories.map(cat => (
@@ -162,41 +122,50 @@ export default function BillerPickerSheet({ visible, initialCategory, onSelect, 
             </View>
           )}
 
-          {/* Biller list */}
-          <FlatList
-            data={filtered}
-            keyExtractor={b => b.id}
-            style={{ maxHeight: 340 }}
-            keyboardShouldPersistTaps="handled"
-            renderItem={({ item }) => (
-              <Pressable
-                style={[st.billerRow, { borderBottomColor: c.border }]}
-                onPress={() => { onSelect(item); setQuery('') }}
-              >
-                <Text style={{ fontSize: 18, marginRight: Spacing.md }}>
-                  {CATEGORY_ICONS[item.category]}
-                </Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={[Typography.caption, { color: c.text1, fontWeight: '600' }]}>
-                    {item.name}
+          {/* Loading */}
+          {loading ? (
+            <View style={st.loadingBox}>
+              <ActivityIndicator color={c.accent} />
+              <Text style={[Typography.caption, { color: c.text4, marginTop: Spacing.sm }]}>
+                Loading providers…
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={filtered}
+              keyExtractor={b => b.id}
+              style={{ maxHeight: 340 }}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => (
+                <Pressable
+                  style={[st.billerRow, { borderBottomColor: c.border }]}
+                  onPress={() => { onSelect(item); setQuery('') }}
+                >
+                  <Text style={{ fontSize: 18, marginRight: Spacing.md }}>
+                    {CATEGORY_ICONS[item.category] ?? '🔌'}
                   </Text>
-                  {item.state && (
-                    <Text style={[Typography.caption, { color: c.text4, fontSize: 10 }]}>
-                      {item.state}
+                  <View style={{ flex: 1 }}>
+                    <Text style={[Typography.caption, { color: c.text1, fontWeight: '600' }]}>
+                      {item.name}
                     </Text>
-                  )}
+                    {item.state && (
+                      <Text style={[Typography.caption, { color: c.text4, fontSize: 10 }]}>
+                        {item.state}
+                      </Text>
+                    )}
+                  </View>
+                  <Text style={[Typography.caption, { color: c.text4 }]}>›</Text>
+                </Pressable>
+              )}
+              ListEmptyComponent={
+                <View style={st.empty}>
+                  <Text style={[Typography.caption, { color: c.text4, textAlign: 'center' }]}>
+                    {query ? `No providers found for "${query}"` : 'No providers in this category'}
+                  </Text>
                 </View>
-                <Text style={[Typography.caption, { color: c.text4 }]}>›</Text>
-              </Pressable>
-            )}
-            ListEmptyComponent={
-              <View style={st.empty}>
-                <Text style={[Typography.caption, { color: c.text4, textAlign: 'center' }]}>
-                  {query ? `No providers found for "${query}"` : 'No providers in this category'}
-                </Text>
-              </View>
-            }
-          />
+              }
+            />
+          )}
 
           <Pressable style={[st.cancelBtn, { borderColor: c.border }]} onPress={onClose}>
             <Text style={[Typography.caption, { color: c.text3 }]}>Cancel</Text>
@@ -262,6 +231,10 @@ const st = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: Spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  loadingBox: {
+    alignItems: 'center',
+    paddingVertical: Spacing.xl,
   },
   empty: {
     paddingVertical: Spacing.xl,
