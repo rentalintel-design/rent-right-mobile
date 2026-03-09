@@ -294,19 +294,17 @@ function TenantView({ tenancy, userId, c }: { tenancy: Tenancy; userId: string; 
                       ₹{formatRent(bill.amount)} · Due {bill.due_date ?? '—'}
                     </Text>
                   </View>
-                  {acct?.biller_id && (
-                    <Pressable
-                      style={[s.billPayBtn, { backgroundColor: c.accent, opacity: payingBillId === bill.id ? 0.5 : 1 }]}
-                      onPress={() => handlePayBill(bill.id!)}
-                      disabled={!!payingBillId}
-                    >
-                      {payingBillId === bill.id ? (
-                        <ActivityIndicator color="#fff" size="small" />
-                      ) : (
-                        <Text style={[Typography.caption, { color: '#fff', fontWeight: '700', fontSize: 11 }]}>Pay</Text>
-                      )}
-                    </Pressable>
-                  )}
+                  <Pressable
+                    style={[s.billPayBtn, { backgroundColor: c.accent, opacity: payingBillId === bill.id ? 0.5 : 1 }]}
+                    onPress={() => handlePayBill(bill.id!)}
+                    disabled={!!payingBillId}
+                  >
+                    {payingBillId === bill.id ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={[Typography.caption, { color: '#fff', fontWeight: '700', fontSize: 11 }]}>Pay</Text>
+                    )}
+                  </Pressable>
                 </View>
               </View>
             )
