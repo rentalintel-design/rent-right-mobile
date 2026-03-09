@@ -19,7 +19,6 @@ import {
   addUtilityAccount, addUtilityBill,
   type Tenancy, type UtilityProviderType, type RentPayment,
 } from 'rent-right-shared'
-import BillerPickerSheet, { type Biller } from '@/components/BillerPickerSheet'
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -113,10 +112,8 @@ export default function TenancyDetailScreen() {
   const [showAddAccount, setShowAddAccount] = useState(false)
   const [newProviderType, setNewProviderType] = useState<UtilityProviderType>('electricity')
   const [newProviderName, setNewProviderName] = useState('')
-  const [newBillerId, setNewBillerId] = useState<string | null>(null)
   const [newConsumerNum, setNewConsumerNum] = useState('')
   const [addingAccount, setAddingAccount] = useState(false)
-  const [showBillerPicker, setShowBillerPicker] = useState(false)
 
   const handleAddAccount = async () => {
     if (!tenancy?.id || !user?.id || !newProviderName.trim() || !newConsumerNum.trim()) return
@@ -126,7 +123,6 @@ export default function TenancyDetailScreen() {
       provider_type: newProviderType,
       provider_name: newProviderName.trim(),
       consumer_number: newConsumerNum.trim(),
-      biller_id: newBillerId ?? undefined,
       added_by: user.id,
     })
     if (result.error) Alert.alert('Error', result.error)
@@ -362,25 +358,11 @@ export default function TenancyDetailScreen() {
                 </Pressable>
               ))}
             </View>
-            <Pressable
-              style={[s.input, { borderColor: newProviderName ? c.accent : c.border, backgroundColor: c.bgSubtle, justifyContent: 'center' }]}
-              onPress={() => setShowBillerPicker(true)}
-            >
-              <Text style={{ color: newProviderName ? c.text1 : c.text4, fontSize: 14 }}>
-                {newProviderName || 'Select provider (tap to search)'}
-              </Text>
-              {newProviderName ? (
-                <Pressable
-                  style={{ position: 'absolute', right: Spacing.md }}
-                  onPress={() => { setNewProviderName(''); setNewBillerId(null) }}
-                  hitSlop={8}
-                >
-                  <Text style={{ color: c.text4, fontSize: 16 }}>✕</Text>
-                </Pressable>
-              ) : (
-                <Text style={{ position: 'absolute', right: Spacing.md, color: c.text4 }}>›</Text>
-              )}
-            </Pressable>
+            <TextInput
+              style={[s.input, { color: c.text1, borderColor: c.border, backgroundColor: c.bgSubtle }]}
+              value={newProviderName} onChangeText={setNewProviderName}
+              placeholder="Provider name (e.g. BESCOM, IGL)" placeholderTextColor={c.text4}
+            />
             <TextInput
               style={[s.input, { color: c.text1, borderColor: c.border, backgroundColor: c.bgSubtle }]}
               value={newConsumerNum} onChangeText={setNewConsumerNum}
@@ -502,17 +484,7 @@ export default function TenancyDetailScreen() {
         <View style={{ height: 80 }} />
       </ScrollView>
 
-      <BillerPickerSheet
-        visible={showBillerPicker}
-        initialCategory={newProviderType}
-        onSelect={(biller: Biller) => {
-          setNewProviderName(biller.name)
-          setNewBillerId(biller.id)
-          setNewProviderType(biller.category as UtilityProviderType)
-          setShowBillerPicker(false)
-        }}
-        onClose={() => setShowBillerPicker(false)}
-      />
+
     </SafeAreaView>
   )
 }
