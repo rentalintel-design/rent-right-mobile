@@ -1,30 +1,19 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import {
+  computeMembershipState,
+  type Membership,
+  type MembershipState,
+} from 'rent-right-shared'
 
-export type Membership = {
-  id: string
-  user_id: string
-  role: 'tenant' | 'landlord'
-  city: string | null
-  amount_paid: number
-  purchased_at: string
-  core_expires_at: string
-  vault_expires_at: string
-  razorpay_payment_id: string | null
-}
+export type { Membership, MembershipState }
 
-export type MembershipState = {
-  tenantMembership: Membership | null
-  landlordMembership: Membership | null
-  isTenantCoreActive: boolean
-  isLandlordCoreActive: boolean
-  isVaultActive: boolean
-  canPostAsLandlord: boolean
+export type UseMembershipResult = MembershipState & {
   loading: boolean
   refresh: () => Promise<void>
 }
 
-export function useMembership(userId?: string): MembershipState {
+export function useMembership(userId?: string): UseMembershipResult {
   const [memberships, setMemberships] = useState<Membership[]>([])
   const [vacancyCount, setVacancyCount] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -50,25 +39,10 @@ export function useMembership(userId?: string): MembershipState {
 
   useEffect(() => { fetch() }, [fetch])
 
-  const now = new Date().toISOString()
-
-  const tenantMembership = memberships.find(m => m.role === 'tenant') ?? null
-  const landlordMembership = memberships.find(m => m.role === 'landlord') ?? null
-
-  const isTenantCoreActive = !!tenantMembership && tenantMembership.core_expires_at > now
-  const isLandlordCoreActive = !!landlordMembership && landlordMembership.core_expires_at > now
-  const isVaultActive = memberships.some(m => m.vault_expires_at > now)
-
-  const landlordMembershipCount = memberships.filter(m => m.role === 'landlord').length
-  const canPostAsLandlord = landlordMembershipCount > vacancyCount
+  const state = computeMembershipState(memberships, vacancyCount)
 
   return {
-    tenantMembership,
-    landlordMembership,
-    isTenantCoreActive,
-    isLandlordCoreActive,
-    isVaultActive,
-    canPostAsLandlord,
+    ...state,
     loading,
     refresh: fetch,
   }

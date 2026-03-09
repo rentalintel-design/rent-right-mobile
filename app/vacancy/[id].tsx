@@ -12,6 +12,8 @@ import { useColors } from '@/hooks/use-theme-color'
 import { Typography, Spacing, Radius } from '@/constants/theme'
 import { formatRent, formatAvailable } from '@/lib/vacancyUtils'
 import { getCached, setCache } from '@/lib/cache'
+import { useMembership } from '@/hooks/useMembership'
+import PaywallSheet from '@/components/PaywallSheet'
 import type { Vacancy } from '@/hooks/useVacancies'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
@@ -20,6 +22,7 @@ export default function VacancyDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const c = useColors()
   const { user } = useAuth()
+  const membership = useMembership(user?.id)
 
   const [vacancy, setVacancy] = useState<Vacancy | null>(null)
   const [loading, setLoading] = useState(true)
@@ -27,6 +30,7 @@ export default function VacancyDetailScreen() {
   const [photoIndex, setPhotoIndex] = useState(0)
   const [lightboxIndex, setLightboxIndex] = useState(0)
   const [lightboxVisible, setLightboxVisible] = useState(false)
+  const [showPaywall, setShowPaywall] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -251,7 +255,14 @@ export default function VacancyDetailScreen() {
           {vacancy?.user_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(vacancy.user_id) && vacancy.user_id !== user?.id && (
           <View style={[styles.section, styles.contactBox, { backgroundColor: c.bgSurface, borderColor: c.border }]}>
             <Text style={[Typography.subtitle, { color: c.text1, marginBottom: Spacing.md }]}>Contact Landlord</Text>
-            <Pressable
+            {!membership.isTenantCoreActive && (
+              <Pressable
+                style={[styles.chatBtn, { backgroundColor: '#374151' }]}
+                onPress={() => setShowPaywall(true)}>
+                <Text style={[Typography.subtitle, { color: '#9ca3af' }]}>🔒 Upgrade to contact landlord</Text>
+              </Pressable>
+            )}
+            {membership.isTenantCoreActive && <Pressable
               style={[styles.chatBtn, { backgroundColor: c.accent }]}
               onPress={async () => {
                 if (!user?.id || !vacancy) return
@@ -297,7 +308,7 @@ export default function VacancyDetailScreen() {
               }}
             >
               <Text style={[Typography.subtitle, { color: '#fff' }]}>💬 Message Landlord</Text>
-            </Pressable>
+            </Pressable>}
           </View>
           )}
         </View>
@@ -335,6 +346,18 @@ export default function VacancyDetailScreen() {
           </Pressable>
         </View>
       </Modal>
+
+      <PaywallSheet
+        visible={showPaywall}
+        feature="Contacting landlords"
+        role="tenant"
+        city={vacancy?.city}
+        onClose={() => setShowPaywall(false)}
+        onSuccess={() => {
+          setShowPaywall(false)
+          membership.refresh()
+        }}
+      />
     </SafeAreaView>
   )
 }

@@ -12,10 +12,10 @@ import { useAuth } from '@/context/AuthContext'
 import { useColors } from '@/hooks/use-theme-color'
 import { useMembership } from '@/hooks/useMembership'
 import { Typography, Spacing, Radius } from '@/constants/theme'
-import { maskPhone, CITY_BOUNDS } from 'rent-right-shared'
+import { maskPhone, CITY_BOUNDS, PLAN_FEATURES, PLAN_PRICES, PLAN_CITIES, CITY_LABELS } from 'rent-right-shared'
 import { formatRent } from '@/lib/vacancyUtils'
 
-const CITIES = Object.keys(CITY_BOUNDS)
+const CITIES = PLAN_CITIES.map(c => c.name)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +65,7 @@ export default function ProfileScreen() {
   // Email edit
   const [editingEmail, setEditingEmail] = useState(false)
   const [emailInput, setEmailInput] = useState('')
+  const [editingCity, setEditingCity] = useState(false)
 
   // Tab data
   const [submissions, setSubmissions] = useState<RentSubmission[]>([])
@@ -167,6 +168,13 @@ export default function ProfileScreen() {
     setEditingEmail(false)
     Alert.alert('Email saved', 'Check your inbox to confirm the new email.')
   }, [emailInput, user?.id, refreshProfile])
+
+  const saveCity = useCallback(async (newCity: string) => {
+    if (!user?.id) return
+    await supabase.from('profiles').update({ city: newCity }).eq('user_id', user.id)
+    await refreshProfile()
+    setEditingCity(false)
+  }, [user?.id, refreshProfile])
 
   const roleEmoji = profile?.role === 'landlord' ? '🏗️' : '🔍'
   const roleColor = profile?.role === 'landlord' ? 'rgba(37,99,235,0.18)' : 'rgba(16,185,129,0.15)'
@@ -301,12 +309,16 @@ export default function ProfileScreen() {
             <PlanCard title="Tenant Plan" emoji="🔍"
               isActive={membership.isTenantCoreActive}
               membership={membership.tenantMembership}
-              features={['📞 10 landlord contacts', '🗝️ Vault access (27mo)', '📊 Full rent history']}
+              features={PLAN_FEATURES.tenant}
+              price={PLAN_PRICES.tenant.label}
+              onBuy={() => router.push({ pathname: '/membership/purchase', params: { role: 'tenant', city: profile?.city ?? '' } })}
               c={c} />
             <PlanCard title="Landlord Plan" emoji="🏗️"
               isActive={membership.isLandlordCoreActive}
               membership={membership.landlordMembership}
-              features={['📋 Post vacancies', '🗝️ Vault access (27mo)', '📊 Full rent history']}
+              features={PLAN_FEATURES.landlord}
+              price={PLAN_PRICES.landlord.label}
+              onBuy={() => router.push({ pathname: '/membership/purchase', params: { role: 'landlord', city: profile?.city ?? '' } })}
               c={c} />
             {membership.isVaultActive && (
               <View style={[s.vaultBadge, { backgroundColor: '#14532d', borderColor: '#166534' }]}>
@@ -482,7 +494,27 @@ export default function ProfileScreen() {
               <Text style={[Typography.body, { color: c.text1 }]}>{profile?.phone ? maskPhone(profile.phone) : '—'}</Text>
               <View style={[s.settingsDivider, { borderColor: c.border }]} />
               <Text style={[s.settingsLabel, { color: c.text4 }]}>CITY</Text>
-              <Text style={[Typography.body, { color: c.text1, textTransform: 'capitalize' }]}>{profile?.city ?? '—'}</Text>
+              {editingCity ? (
+                <View style={s.cityRow}>
+                  {CITIES.map(ct => (
+                    <Pressable key={ct}
+                      style={[s.cityChip, { backgroundColor: profile?.city === ct ? c.accent : c.bgSubtle, borderColor: profile?.city === ct ? c.accent : c.border }]}
+                      onPress={() => saveCity(ct)}>
+                      <Text style={[Typography.caption, { color: profile?.city === ct ? '#fff' : c.text3, fontSize: 10, textTransform: 'capitalize' }]}>
+                        {CITY_LABELS[ct] ?? ct}
+                      </Text>
+                    </Pressable>
+                  ))}
+                  <Pressable onPress={() => setEditingCity(false)}>
+                    <Text style={[Typography.caption, { color: c.text4, marginLeft: 4 }]}>Cancel</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable onPress={() => setEditingCity(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Text style={[Typography.body, { color: c.text1, textTransform: 'capitalize' }]}>{CITY_LABELS[profile?.city ?? ''] ?? profile?.city ?? '—'}</Text>
+                  <Text style={{ color: c.text4, fontSize: 11 }}>✏️</Text>
+                </Pressable>
+              )}
               <View style={[s.settingsDivider, { borderColor: c.border }]} />
               <Text style={[s.settingsLabel, { color: c.text4 }]}>ROLE</Text>
               <Text style={[Typography.body, { color: c.text1, textTransform: 'capitalize' }]}>{profile?.role ?? '—'}</Text>
@@ -609,8 +641,9 @@ export default function ProfileScreen() {
 
 // ─── PlanCard ─────────────────────────────────────────────────────────────────
 
-function PlanCard({ title, emoji, isActive, membership, features, c }: {
-  title: string; emoji: string; isActive: boolean; membership: any; features: string[]; c: any
+function PlanCard({ title, emoji, isActive, membership, features, price, onBuy, c }: {
+  title: string; emoji: string; isActive: boolean; membership: any
+  features: string[]; price: string; onBuy: () => void; c: any
 }) {
   return (
     <View style={[s.planCard, { backgroundColor: c.bgSurface, borderColor: isActive ? c.accent : c.border }]}>
@@ -633,6 +666,11 @@ function PlanCard({ title, emoji, isActive, membership, features, c }: {
           <Text key={f} style={[Typography.caption, { color: c.text3, fontSize: 11 }]}>{f}</Text>
         ))}
       </View>
+      {!isActive && (
+        <Pressable style={[s.buyBtn, { backgroundColor: c.accent }]} onPress={onBuy}>
+          <Text style={[Typography.caption, { color: '#fff', fontWeight: '600' }]}>Buy {price}</Text>
+        </Pressable>
+      )}
     </View>
   )
 }
@@ -736,4 +774,5 @@ const s = StyleSheet.create({
     fontSize: 14,
   },
   saveEmailBtn: { borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm },
+  buyBtn: { borderRadius: Radius.md, paddingVertical: Spacing.sm, alignItems: 'center', marginTop: Spacing.sm },
 })

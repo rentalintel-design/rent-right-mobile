@@ -8,8 +8,10 @@ import { router, useFocusEffect } from 'expo-router'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/context/AuthContext'
 import { useColors } from '@/hooks/use-theme-color'
+import { useMembership } from '@/hooks/useMembership'
 import { Typography, Spacing, Radius } from '@/constants/theme'
 import { countPhotos, getAllRooms } from 'rent-right-shared'
+import PaywallSheet from '@/components/PaywallSheet'
 import type { VaultRecord, VaultFloor, VaultRoom } from 'rent-right-shared'
 
 const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
@@ -22,9 +24,11 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 export default function VaultScreen() {
   const c = useColors()
   const { user } = useAuth()
+  const membership = useMembership(user?.id)
   const [records, setRecords] = useState<VaultRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [showPaywall, setShowPaywall] = useState(false)
 
   const fetchRecords = useCallback(async () => {
     if (!user?.id) return
@@ -49,6 +53,14 @@ export default function VaultScreen() {
     setRefreshing(false)
   }, [fetchRecords])
 
+  const handleCreate = () => {
+    if (!membership.isVaultActive) {
+      setShowPaywall(true)
+    } else {
+      router.push('/vault/create')
+    }
+  }
+
   if (loading) {
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: c.bgPage }]}>
@@ -65,10 +77,12 @@ export default function VaultScreen() {
       <View style={[styles.header, { borderBottomColor: c.border }]}>
         <Text style={[Typography.title, { color: c.text1 }]}>Vault</Text>
         <Pressable
-          style={[styles.createBtn, { backgroundColor: c.accent }]}
-          onPress={() => router.push('/vault/create')}
+          style={[styles.createBtn, { backgroundColor: membership.isVaultActive ? c.accent : '#374151' }]}
+          onPress={handleCreate}
         >
-          <Text style={[Typography.caption, { color: '#fff', fontWeight: '600' }]}>+ New Record</Text>
+          <Text style={[Typography.caption, { color: '#fff', fontWeight: '600' }]}>
+            {membership.isVaultActive ? '+ New Record' : '🔒 Upgrade'}
+          </Text>
         </Pressable>
       </View>
 
@@ -80,7 +94,18 @@ export default function VaultScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.accent} colors={[c.accent]} />
         }
         renderItem={({ item }) => <VaultCard record={item} c={c} />}
-        ListEmptyComponent={<EmptyState c={c} />}
+        ListEmptyComponent={<EmptyState c={c} isVaultActive={membership.isVaultActive} onUpgrade={() => setShowPaywall(true)} />}
+      />
+
+      <PaywallSheet
+        visible={showPaywall}
+        feature="Vault access"
+        role="tenant"
+        onClose={() => setShowPaywall(false)}
+        onSuccess={() => {
+          setShowPaywall(false)
+          membership.refresh()
+        }}
       />
     </SafeAreaView>
   )
@@ -142,7 +167,7 @@ function Stat({ icon, value, label, c }: { icon: string; value: number; label: s
   )
 }
 
-function EmptyState({ c }: { c: any }) {
+function EmptyState({ c, isVaultActive, onUpgrade }: { c: any; isVaultActive: boolean; onUpgrade: () => void }) {
   return (
     <View style={styles.empty}>
       <Text style={{ fontSize: 48, marginBottom: Spacing.base }}>🛡️</Text>
@@ -157,12 +182,21 @@ function EmptyState({ c }: { c: any }) {
           <Text key={f} style={[Typography.caption, { color: c.text4 }]}>{f}</Text>
         ))}
       </View>
-      <Pressable
-        style={[styles.emptyBtn, { backgroundColor: c.accent }]}
-        onPress={() => router.push('/vault/create')}
-      >
-        <Text style={[Typography.subtitle, { color: '#fff' }]}>Create Record</Text>
-      </Pressable>
+      {isVaultActive ? (
+        <Pressable
+          style={[styles.emptyBtn, { backgroundColor: c.accent }]}
+          onPress={() => router.push('/vault/create')}
+        >
+          <Text style={[Typography.subtitle, { color: '#fff' }]}>Create Record</Text>
+        </Pressable>
+      ) : (
+        <Pressable
+          style={[styles.emptyBtn, { backgroundColor: '#374151' }]}
+          onPress={onUpgrade}
+        >
+          <Text style={[Typography.subtitle, { color: '#9ca3af' }]}>🔒 Upgrade for Vault Access</Text>
+        </Pressable>
+      )}
     </View>
   )
 }

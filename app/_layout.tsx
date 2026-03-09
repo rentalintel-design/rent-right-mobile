@@ -85,6 +85,10 @@ function RootNavigator() {
       <Stack.Screen name="contribution/submit" />
       <Stack.Screen name="chat/inbox" />
       <Stack.Screen name="chat/[conversationId]" />
+      <Stack.Screen name="membership/purchase" />
+      <Stack.Screen name="dashboard" />
+      <Stack.Screen name="dashboard/create" />
+      <Stack.Screen name="dashboard/[tenancyId]" />
     </Stack>
   )
 }
