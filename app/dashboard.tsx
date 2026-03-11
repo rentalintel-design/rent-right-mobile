@@ -1,7 +1,7 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import {
   View, Text, ScrollView, Pressable,
-  StyleSheet, ActivityIndicator, Alert, TextInput,
+  StyleSheet, ActivityIndicator, Alert, TextInput, FlatList,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
@@ -15,7 +15,7 @@ import { useUtilities } from '@/hooks/useUtilities'
 import { Typography, Spacing, Radius } from '@/constants/theme'
 import { formatRent } from '@/lib/vacancyUtils'
 import { openUpiPayment, formatMonth } from '@/lib/upiPayment'
-import { markRentPaid, type RentPayment, type Tenancy } from 'rent-right-shared'
+import { markRentPaid, fetchMyProperties, type RentPayment, type Tenancy, type LandlordProperty } from 'rent-right-shared'
 import SetuBillPaySheet from '@/components/SetuBillPaySheet'
 
 const WEB_BASE = 'https://rent-right-seven.vercel.app'
@@ -370,7 +370,18 @@ function TenantView({ tenancy, userId, c }: { tenancy: Tenancy; userId: string; 
 // ─── Landlord View ──────────────────────────────────────────────────────────
 
 function LandlordView({ tenancies, c }: { tenancies: Tenancy[]; c: any }) {
-  if (tenancies.length === 0) {
+  const { user } = useAuth()
+  const [myProperties, setMyProperties] = useState<LandlordProperty[]>([])
+
+  useEffect(() => {
+    if (!user?.id) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    fetchMyProperties(supabase as any, user.id).then(result => {
+      if (result.data) setMyProperties(result.data)
+    })
+  }, [user?.id])
+
+  if (tenancies.length === 0 && myProperties.length === 0) {
     return (
       <EmptyState
         emoji="🏗️"
@@ -383,6 +394,51 @@ function LandlordView({ tenancies, c }: { tenancies: Tenancy[]; c: any }) {
 
   return (
     <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+      {/* My Properties — persistent property cards */}
+      {myProperties.length > 0 && (
+        <View style={{ marginBottom: Spacing.lg }}>
+          <Text style={{ color: c.text3, fontSize: 10, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginBottom: Spacing.sm }}>
+            My Properties
+          </Text>
+          <FlatList
+            data={myProperties}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={p => p.id}
+            ItemSeparatorComponent={() => <View style={{ width: 8 }} />}
+            renderItem={({ item: p }) => {
+              const statusColor = p.status === 'tenanted' ? '#22c55e' : p.status === 'unlisted' ? '#4a6685' : '#60a5fa'
+              const statusLabel = p.status === 'tenanted' ? 'Tenanted' : p.status === 'unlisted' ? 'Unlisted' : 'Vacant'
+              return (
+                <Pressable
+                  style={{ backgroundColor: c.bgSubtle, borderColor: c.border, borderWidth: 1, borderRadius: 12, padding: 12, width: 160 }}
+                  onPress={() => router.push(`/property/${p.id}`)}
+                >
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <Text style={{ color: statusColor, fontSize: 9, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' }}>{statusLabel}</Text>
+                    {p.bhk_type && <Text style={{ color: c.text4, fontSize: 9 }}>{p.bhk_type}</Text>}
+                  </View>
+                  <Text style={{ color: c.text1, fontSize: 12, fontWeight: '600', lineHeight: 16, marginBottom: 2 }} numberOfLines={2}>{p.name}</Text>
+                  <Text style={{ color: c.text3, fontSize: 10, textTransform: 'capitalize', marginBottom: 4 }}>{p.city}</Text>
+                  {p.active_tenancy ? (
+                    <Text style={{ color: c.text2, fontSize: 10 }}>
+                      {p.active_tenancy.tenant_name ?? 'Tenant joined'} · ₹{p.active_tenancy.monthly_rent.toLocaleString('en-IN')}
+                    </Text>
+                  ) : p.last_vacancy ? (
+                    <Text style={{ color: c.text4, fontSize: 10 }}>Last: ₹{p.last_vacancy.asking_rent.toLocaleString('en-IN')}</Text>
+                  ) : null}
+                  {(p.utility_account_count ?? 0) > 0 && (
+                    <Text style={{ color: c.text4, fontSize: 10, marginTop: 2 }}>
+                      {p.utility_account_count} {p.utility_account_count === 1 ? 'utility' : 'utilities'}
+                    </Text>
+                  )}
+                </Pressable>
+              )
+            }}
+          />
+        </View>
+      )}
+
       <Pressable
         style={[s.payBtn, { backgroundColor: c.accent, marginBottom: Spacing.lg }]}
         onPress={() => router.push('/dashboard/create')}
